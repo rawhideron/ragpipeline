@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-oauth2-proxy-config
+  namespace: rag
+data:
+  OAUTH2_PROXY_PROVIDER: oidc
+  OAUTH2_PROXY_OIDC_ISSUER_URL: https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline
+  OAUTH2_PROXY_REDIRECT_URL: https://ragpipeline.duckdns.org/oauth2/callback
+  OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+  OAUTH2_PROXY_UPSTREAMS: http://rag-frontend-153.rag.svc.cluster.local
+  OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+  OAUTH2_PROXY_REVERSE_PROXY: "true"
+  OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+  OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+  OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
+  OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+  OAUTH2_PROXY_COOKIE_SECURE: "true"
+  OAUTH2_PROXY_COOKIE_SAMESITE: lax
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-oauth2-proxy
+  namespace: rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app: rag-oauth2-proxy
+    spec:
+      containers:
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.1
+          envFrom:
+            - configMapRef:
+                name: rag-oauth2-proxy-config
+            - secretRef:
+                name: rag-oauth2-proxy-secrets
+          ports:
+            - containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 8
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-oauth2-proxy
+  namespace: rag
+spec:
+  selector:
+    app: rag-oauth2-proxy
+  ports:
+    - name: http
+      port: 4180
+      targetPort: 4180
+
