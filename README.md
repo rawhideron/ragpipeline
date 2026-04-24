@@ -4,7 +4,7 @@ Phase 1 RAG stack for the homelab.
 
 ## Target Layout
 
-- Workload cluster: `192.168.1.153`, namespace `rag`
+- Workload cluster: `192.168.1.176`, namespace `rag`
 - Ingress/auth cluster: `192.168.1.230`, namespace `rag`
 - Public URL: `https://ragpipeline.duckdns.org`
 - Keycloak: `https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline`
@@ -19,7 +19,7 @@ Phase 1 RAG stack for the homelab.
 - RAG API at `/api/query`
 - static frontend
 - Secrets/ConfigMaps
-- NodePort exposure on host `153`
+- NodePort exposure on host `176`
 - nginx Ingress on host `230`
 - Keycloak OIDC protection through `oauth2-proxy`
 
@@ -87,15 +87,15 @@ Create a client in realm `ragpipeline`:
 From this repo on your workstation:
 
 ```bash
-./scripts/sync-to-153.sh
+./scripts/sync-to-176.sh
 ```
 
-On host `153`:
+On host `176`:
 
 ```bash
-cd /home/rawhideron/Projects/ragpipeline
+cd /home/ron-goodman/Projects/ragpipeline
 ./scripts/build-images.sh
-./scripts/deploy-153.sh
+./scripts/deploy-176.sh
 ```
 
 On host `230`:
@@ -107,11 +107,11 @@ cd /home/rongoodman/Projects/ragpipeline
 
 ## ArgoCD
 
-ArgoCD runs on host `230` and already has host `153` registered as a cluster.
+ArgoCD runs on host `230` and syncs the RAG workloads to host `176`.
 The ArgoCD setup is split into two Applications because one Application can only
 sync to one destination:
 
-- `ragpipeline-workloads`: syncs `k8s/153` to host `153`, namespace `rag`
+- `ragpipeline-workloads`: syncs `k8s/176` to host `176`, namespace `rag`
 - `ragpipeline-ingress`: syncs `k8s/230` to host `230`, namespace `rag`
 
 The manifests assume the public Git repo will be:
