@@ -10,7 +10,7 @@ spec:
     targetRevision: main
     path: k8s/176
   destination:
-    server: https://192.168.1.176:43087
+    server: https://192.168.1.176:16443
     namespace: rag
   syncPolicy:
     automated:
