@@ -1,0 +1,8 @@
+anthropic==0.76.0
+fastapi==0.124.0
+httpx==0.28.1
+openai==2.14.0
+pypdf==6.4.1
+python-multipart==0.0.20
+qdrant-client==1.16.1
+uvicorn[standard]==0.38.0
