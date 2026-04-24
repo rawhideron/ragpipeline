@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ragpipeline-workloads
+  namespace: argocd
+spec:
+  project: ragpipeline-project
+  source:
+    repoURL: https://github.com/rawhideron/ragpipeline
+    targetRevision: main
+    path: k8s/153
+  destination:
+    server: https://192.168.1.153:44847
+    namespace: rag
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
