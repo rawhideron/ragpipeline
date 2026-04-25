@@ -24,6 +24,29 @@ Phase 1 RAG stack for the homelab.
 - nginx Ingress on host `230`
 - Keycloak OIDC protection through `oauth2-proxy`
 
+## Request Flow
+
+```mermaid
+flowchart LR
+  user[Browser] --> public[RAG public URL<br/>ragpipeline.duckdns.org]
+  public --> ingress230[Host 230<br/>nginx Ingress<br/>namespace rag]
+  ingress230 --> oauth[oauth2-proxy<br/>OIDC gate]
+  oauth --> keycloak[Keycloak<br/>host 230 namespace keycloak<br/>realm ragpipeline]
+  oauth --> frontendSvc[ExternalName-like service/endpoints<br/>rag-frontend-176]
+  frontendSvc --> proxy176[Host 176 frontend proxy<br/>:18080 to Kind NodePort]
+  proxy176 --> frontend[Frontend<br/>namespace rag]
+  frontend --> ingest[Ingestion API<br/>/api/ingest]
+  frontend --> ragapi[RAG API<br/>/api/query]
+  ingest --> qdrant[(Qdrant<br/>rag_documents_ollama)]
+  ragapi --> qdrant
+  ingest --> ollama[Ollama on host 176<br/>nomic-embed-text]
+  ragapi --> ollama
+  ollama --> gpu[NVIDIA RTX 3070 Laptop GPU]
+
+  argocd[ArgoCD on host 230<br/>/argocd] --> app1[ragpipeline-workloads<br/>syncs k8s/176 to host 176]
+  argocd --> app2[ragpipeline-ingress<br/>syncs k8s/230 to host 230]
+```
+
 ## LLM Provider Notes
 
 The active Phase 1 config uses the host `176` Ollama service:
@@ -136,6 +159,7 @@ sync to one destination:
 
 - `ragpipeline-workloads`: syncs `k8s/176` to host `176`, namespace `rag`
 - `ragpipeline-ingress`: syncs `k8s/230` to host `230`, namespace `rag`
+- `reunion`: syncs the Goodman Reunion `k8s` path to host `230`, namespace `reunion`
 
 The manifests assume the public Git repo will be:
 
