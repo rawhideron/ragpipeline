@@ -112,6 +112,22 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return embed_with_openai(texts)
 
 
+def search_points(query_vector: list[float], limit: int) -> list[Any]:
+    if hasattr(qdrant, "query_points"):
+        return qdrant.query_points(
+            collection_name=COLLECTION,
+            query=query_vector,
+            limit=limit,
+            with_payload=True,
+        ).points
+    return qdrant.search(
+        collection_name=COLLECTION,
+        query_vector=query_vector,
+        limit=limit,
+        with_payload=True,
+    )
+
+
 def document_id(filename: str, content: bytes) -> str:
     digest = hashlib.sha256(content).hexdigest()[:16]
     safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", filename).strip("-")
@@ -211,12 +227,7 @@ async def ingest(file: UploadFile = File(...), source: str = Form(default="uploa
 def query(request: QueryRequest) -> dict[str, Any]:
     ensure_collection()
     query_vector = embed_texts([request.question])[0]
-    hits = qdrant.search(
-        collection_name=COLLECTION,
-        query_vector=query_vector,
-        limit=max(1, min(request.top_k, 12)),
-        with_payload=True,
-    )
+    hits = search_points(query_vector, max(1, min(request.top_k, 12)))
     sources = [
         {
             "score": hit.score,
