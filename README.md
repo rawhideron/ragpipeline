@@ -9,8 +9,9 @@ Phase 1 RAG stack for the homelab.
 - Public URL: `https://ragpipeline.duckdns.org`
 - Keycloak: `https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline`
 - Vector database: Qdrant
-- Generation provider: OpenAI by default, Anthropic optional
-- Ollama: defined but kept offline with `replicas: 0`
+- Generation provider: Ollama on host `176`
+- Embeddings provider: Ollama `nomic-embed-text`
+- Ollama: host systemd service on `176`, bound to `0.0.0.0:11434`; the in-cluster Ollama Deployment is kept offline with `replicas: 0`
 
 ## What Phase 1 Deploys
 
@@ -23,12 +24,32 @@ Phase 1 RAG stack for the homelab.
 - nginx Ingress on host `230`
 - Keycloak OIDC protection through `oauth2-proxy`
 
+## LLM Provider Notes
+
+The active Phase 1 config uses the host `176` Ollama service:
+
+- Chat model: `qwen2.5:1.5b`
+- Embedding model: `nomic-embed-text`
+- Qdrant collection: `rag_documents_ollama`
+- Vector size: `768`
+
+Host `176` has an NVIDIA RTX 3070 Laptop GPU with 8 GiB VRAM. Ollama detects it
+through CUDA, so small models are a reasonable fit. Larger 7B-class models may
+fit only with heavy quantization and will be tight because system RAM is already
+under pressure.
+
+The Kubernetes Ollama Deployment remains defined but scaled to zero. Kind GPU
+device scheduling is not active yet: the NVIDIA device plugin runs, but the Kind
+nodes do not advertise `nvidia.com/gpu` until the NVIDIA container runtime/toolkit
+is wired into the Kind node containerd runtime.
+
 ## OpenAI Billing Reality Check
 
 Your paid Codex/ChatGPT subscription does not automatically pay for API usage.
 OpenAI documents ChatGPT billing and API Platform billing as separate systems, and
-ChatGPT Plus says API usage is separate and billed independently. For this project
-you need an API Platform organization with billing enabled and an `OPENAI_API_KEY`.
+ChatGPT Plus says API usage is separate and billed independently. OpenAI is no
+longer required for the default deployment, but if you switch back to OpenAI you
+need an API Platform organization with billing enabled and an `OPENAI_API_KEY`.
 
 Check:
 
@@ -45,7 +66,9 @@ Sources:
 
 ## Required Secrets
 
-Create these before deploying workloads:
+Create these before deploying workloads if you plan to use OpenAI or Anthropic.
+The default Ollama deployment does not require an API key, but the existing API
+Deployments still tolerate this secret being present.
 
 ```bash
 kubectl create namespace rag --dry-run=client -o yaml | kubectl apply -f -
