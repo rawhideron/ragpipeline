@@ -56,4 +56,3 @@ spec:
     - name: http
       port: 6333
       targetPort: 6333
-

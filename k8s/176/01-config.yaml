@@ -5,10 +5,14 @@ metadata:
   namespace: rag
 data:
   QDRANT_URL: http://qdrant:6333
-  QDRANT_COLLECTION: rag_documents
-  GENERATION_PROVIDER: openai
+  QDRANT_COLLECTION: rag_documents_ollama
+  GENERATION_PROVIDER: ollama
+  EMBEDDING_PROVIDER: ollama
+  OLLAMA_BASE_URL: http://192.168.1.176:11434
+  OLLAMA_CHAT_MODEL: qwen2.5:1.5b
+  OLLAMA_EMBEDDING_MODEL: nomic-embed-text
   OPENAI_CHAT_MODEL: gpt-5-mini
   OPENAI_EMBEDDING_MODEL: text-embedding-3-small
-  VECTOR_SIZE: "1536"
+  VECTOR_SIZE: "768"
   MAX_CONTEXT_CHARS: "8000"
   CORS_ORIGINS: https://ragpipeline.duckdns.org

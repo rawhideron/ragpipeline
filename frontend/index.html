@@ -111,7 +111,7 @@
           for (const source of data.sources || []) {
             const item = document.createElement("div");
             item.className = "source";
-            item.innerHTML = `<strong>${source.filename || "Document"} · chunk ${source.chunk_index}</strong><span>${source.text || ""}</span>`;
+            item.innerHTML = `<strong>${source.filename || "Document"} - chunk ${source.chunk_index}</strong><span>${source.text || ""}</span>`;
             sourcesEl.appendChild(item);
           }
         } catch (error) {
@@ -123,4 +123,3 @@
     </script>
   </body>
 </html>
-

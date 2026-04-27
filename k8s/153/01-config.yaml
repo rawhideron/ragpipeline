@@ -12,4 +12,3 @@ data:
   VECTOR_SIZE: "1536"
   MAX_CONTEXT_CHARS: "8000"
   CORS_ORIGINS: https://ragpipeline.duckdns.org
-

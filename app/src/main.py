@@ -5,6 +5,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
@@ -22,9 +23,13 @@ except Exception:  # pragma: no cover
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
 COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_documents")
 GENERATION_PROVIDER = os.getenv("GENERATION_PROVIDER", "openai").lower()
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", GENERATION_PROVIDER).lower()
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-5-mini")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:1.5b")
+OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "1536"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "8000"))
 
@@ -38,7 +43,8 @@ app.add_middleware(
 )
 
 qdrant = QdrantClient(url=QDRANT_URL)
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client: OpenAI | None = None
+http_client = httpx.Client(timeout=120)
 
 
 class QueryRequest(BaseModel):
@@ -54,6 +60,13 @@ def ensure_collection() -> None:
         collection_name=COLLECTION,
         vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
     )
+
+
+def get_openai_client() -> OpenAI:
+    global openai_client
+    if openai_client is None:
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return openai_client
 
 
 def extract_text(filename: str, payload: bytes) -> str:
@@ -76,9 +89,43 @@ def chunk_text(text: str, max_chars: int = 1400, overlap: int = 200) -> list[str
     return [chunk for chunk in chunks if chunk.strip()]
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    response = openai_client.embeddings.create(model=OPENAI_EMBEDDING_MODEL, input=texts)
+def embed_with_openai(texts: list[str]) -> list[list[float]]:
+    response = get_openai_client().embeddings.create(model=OPENAI_EMBEDDING_MODEL, input=texts)
     return [item.embedding for item in response.data]
+
+
+def embed_with_ollama(texts: list[str]) -> list[list[float]]:
+    vectors: list[list[float]] = []
+    for text in texts:
+        response = http_client.post(
+            f"{OLLAMA_BASE_URL}/api/embeddings",
+            json={"model": OLLAMA_EMBEDDING_MODEL, "prompt": text},
+        )
+        response.raise_for_status()
+        vectors.append(response.json()["embedding"])
+    return vectors
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    if EMBEDDING_PROVIDER == "ollama":
+        return embed_with_ollama(texts)
+    return embed_with_openai(texts)
+
+
+def search_points(query_vector: list[float], limit: int) -> list[Any]:
+    if hasattr(qdrant, "query_points"):
+        return qdrant.query_points(
+            collection_name=COLLECTION,
+            query=query_vector,
+            limit=limit,
+            with_payload=True,
+        ).points
+    return qdrant.search(
+        collection_name=COLLECTION,
+        query_vector=query_vector,
+        limit=limit,
+        with_payload=True,
+    )
 
 
 def document_id(filename: str, content: bytes) -> str:
@@ -88,7 +135,7 @@ def document_id(filename: str, content: bytes) -> str:
 
 
 def answer_with_openai(question: str, context: str) -> str:
-    response = openai_client.responses.create(
+    response = get_openai_client().responses.create(
         model=OPENAI_CHAT_MODEL,
         input=[
             {
@@ -118,6 +165,28 @@ def answer_with_anthropic(question: str, context: str) -> str:
         messages=[{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}],
     )
     return "\n".join(block.text for block in message.content if getattr(block, "type", "") == "text")
+
+
+def answer_with_ollama(question: str, context: str) -> str:
+    response = http_client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": OLLAMA_CHAT_MODEL,
+            "stream": False,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Answer using only the supplied context. If the context does not contain "
+                        "the answer, say you do not know from the uploaded documents."
+                    ),
+                },
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+            ],
+        },
+    )
+    response.raise_for_status()
+    return response.json()["message"]["content"]
 
 
 @app.get("/health")
@@ -158,12 +227,7 @@ async def ingest(file: UploadFile = File(...), source: str = Form(default="uploa
 def query(request: QueryRequest) -> dict[str, Any]:
     ensure_collection()
     query_vector = embed_texts([request.question])[0]
-    hits = qdrant.search(
-        collection_name=COLLECTION,
-        query_vector=query_vector,
-        limit=max(1, min(request.top_k, 12)),
-        with_payload=True,
-    )
+    hits = search_points(query_vector, max(1, min(request.top_k, 12)))
     sources = [
         {
             "score": hit.score,
@@ -177,7 +241,8 @@ def query(request: QueryRequest) -> dict[str, Any]:
     context = "\n\n".join(source["text"] or "" for source in sources)[:MAX_CONTEXT_CHARS]
     if GENERATION_PROVIDER == "anthropic":
         answer = answer_with_anthropic(request.question, context)
+    elif GENERATION_PROVIDER == "ollama":
+        answer = answer_with_ollama(request.question, context)
     else:
         answer = answer_with_openai(request.question, context)
     return {"answer": answer, "sources": sources}
-
