@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: ragpipeline-project
+  namespace: argocd
+spec:
+  sourceRepos:
+    - https://github.com/rawhideron/ragpipeline
+  destinations:
+    - server: https://192.168.1.176:16443
+      namespace: rag
+    - server: https://kubernetes.default.svc
+      namespace: rag
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  roles:
+    - name: admins
+      policies:
+        - p, proj:ragpipeline-project:admins, applications, *, ragpipeline-project/*, allow
+    - name: developers
+      policies:
+        - p, proj:ragpipeline-project:developers, applications, get, ragpipeline-project/*, allow
+        - p, proj:ragpipeline-project:developers, applications, sync, ragpipeline-project/*, allow

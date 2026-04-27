@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ragpipeline-ingress
+  namespace: argocd
+spec:
+  project: ragpipeline-project
+  source:
+    repoURL: https://github.com/rawhideron/ragpipeline
+    targetRevision: main
+    path: k8s/230
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rag
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
