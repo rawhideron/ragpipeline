@@ -16,6 +16,8 @@ Phase 1 RAG stack for the homelab.
 
 - Qdrant
 - ingestion API at `/api/ingest`
+- website ingestion API at `/api/ingest/url`
+- document lifecycle API at `/api/documents`
 - RAG API at `/api/query`
 - static frontend
 - Secrets/ConfigMaps
@@ -105,6 +107,26 @@ cd /home/rongoodman/Projects/ragpipeline
 ./scripts/deploy-230.sh
 ```
 
+## Document Lifecycle And Website Ingestion
+
+Uploaded files and ingested URLs are stored in Qdrant with document-level
+metadata so they can be listed, replaced, and deleted as a unit. Re-ingesting the
+same filename or URL replaces the existing chunks for that document.
+
+The API exposes:
+
+- `POST /api/ingest` for `.txt`, `.md`, and `.pdf` uploads.
+- `POST /api/ingest/url` with JSON body `{"url": "https://example.com/page"}`.
+- `GET /api/documents` to list indexed documents.
+- `DELETE /api/documents/{document_id}` to delete all chunks for one document.
+- `POST /api/query` to query the indexed chunks.
+
+URL ingestion only accepts `http` and `https`, verifies `robots.txt` before
+fetching the page, sends the `INGEST_USER_AGENT`, and limits fetched content to
+`MAX_URL_BYTES` bytes. Private, loopback, link-local, reserved, and multicast
+targets are blocked unless `ALLOW_PRIVATE_URL_INGEST=true` is set. It currently
+ingests one page at a time.
+
 ## ArgoCD
 
 ArgoCD runs on host `230` and syncs the RAG workloads to host `176`.
@@ -138,4 +160,6 @@ In the browser:
 1. Open `https://ragpipeline.duckdns.org`.
 2. Log in through Keycloak.
 3. Upload a `.txt`, `.md`, or `.pdf` document.
-4. Ask a question about the document.
+4. Ingest a single documentation URL if desired.
+5. Use the document list to confirm or delete indexed documents.
+6. Ask a question about the ingested content.

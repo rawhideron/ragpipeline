@@ -17,6 +17,8 @@ Phase 1 RAG stack for the homelab.
 
 - Qdrant
 - ingestion API at `/api/ingest`
+- website ingestion API at `/api/ingest/url`
+- document lifecycle API at `/api/documents`
 - RAG API at `/api/query`
 - static frontend
 - Secrets/ConfigMaps
@@ -36,8 +38,10 @@ flowchart LR
   frontendSvc --> proxy176[Host 176 frontend proxy<br/>:18080 to Kind NodePort]
   proxy176 --> frontend[Frontend<br/>namespace rag]
   frontend --> ingest[Ingestion API<br/>/api/ingest]
+  frontend --> docs[Document lifecycle API<br/>/api/documents]
   frontend --> ragapi[RAG API<br/>/api/query]
   ingest --> qdrant[(Qdrant<br/>rag_documents_ollama)]
+  docs --> qdrant
   ragapi --> qdrant
   ingest --> ollama[Ollama on host 176<br/>nomic-embed-text]
   ragapi --> ollama
@@ -151,6 +155,43 @@ cd /home/rongoodman/Projects/ragpipeline
 ./scripts/deploy-230.sh
 ```
 
+## Document Lifecycle And Website Ingestion
+
+Uploaded files and ingested URLs are stored in Qdrant with document-level
+metadata so they can be listed, replaced, and deleted as a unit. Re-ingesting the
+same filename or URL replaces the existing chunks for that document.
+
+Each chunk payload includes:
+
+- `document_id`
+- `source_type`
+- `source_uri`
+- `title`
+- `filename`
+- `content_hash`
+- `version_id`
+- `ingested_at`
+- `updated_at`
+- `chunk_index`
+- `chunk_count`
+- `license`
+- `attribution`
+
+The API exposes:
+
+- `POST /api/ingest` for `.txt`, `.md`, and `.pdf` uploads.
+- `POST /api/ingest/url` with JSON body `{"url": "https://example.com/page"}`.
+- `GET /api/documents` to list indexed documents.
+- `DELETE /api/documents/{document_id}` to delete all chunks for one document.
+- `POST /api/query` to query the indexed chunks.
+
+URL ingestion only accepts `http` and `https`, verifies `robots.txt` before
+fetching the page, sends the `INGEST_USER_AGENT`, and limits fetched content to
+`MAX_URL_BYTES` bytes. Private, loopback, link-local, reserved, and multicast
+targets are blocked unless `ALLOW_PRIVATE_URL_INGEST=true` is set. It currently
+ingests one page at a time; sitemap crawling is intentionally left for a later
+step so rate limiting, scope rules, and attribution can be handled deliberately.
+
 ## ArgoCD
 
 ArgoCD runs on host `230` and syncs the RAG workloads to host `176`.
@@ -185,4 +226,6 @@ In the browser:
 1. Open `https://ragpipeline.duckdns.org`.
 2. Log in through Keycloak.
 3. Upload a `.txt`, `.md`, or `.pdf` document.
-4. Ask a question about the document.
+4. Ingest a single documentation URL if desired.
+5. Use the document list to confirm or delete indexed documents.
+6. Ask a question about the ingested content.
