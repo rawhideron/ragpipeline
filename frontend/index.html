@@ -73,6 +73,16 @@
           </section>
 
           <section>
+            <h2>Python Docs</h2>
+            <form id="pythonDocsForm">
+              <label for="pythonDocsUrl">Docs URL</label>
+              <input id="pythonDocsUrl" name="url" type="url" value="https://docs.python.org/3/" required />
+              <button id="pythonDocsButton" type="submit">Ingest Python Docs</button>
+            </form>
+            <pre id="pythonDocsResult">No docs bundle ingested yet.</pre>
+          </section>
+
+          <section>
             <h2>Documents</h2>
             <button id="refreshButton" class="secondary" type="button">Refresh</button>
             <div class="documents" id="documents"></div>
@@ -96,6 +106,7 @@
       const statusEl = document.getElementById("status");
       const uploadResult = document.getElementById("uploadResult");
       const urlResult = document.getElementById("urlResult");
+      const pythonDocsResult = document.getElementById("pythonDocsResult");
       const answerEl = document.getElementById("answer");
       const sourcesEl = document.getElementById("sources");
       const documentsEl = document.getElementById("documents");
@@ -160,6 +171,21 @@
         }
       }
 
+      async function pollIngestJob(jobId) {
+        let done = false;
+        while (!done) {
+          const response = await fetch(`/api/ingest/jobs/${encodeURIComponent(jobId)}`);
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || "Could not load ingest job");
+          pythonDocsResult.textContent = JSON.stringify(data, null, 2);
+          done = ["completed", "failed"].includes(data.status);
+          if (!done) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+          }
+        }
+        await loadDocuments();
+      }
+
       document.getElementById("uploadForm").addEventListener("submit", async (event) => {
         event.preventDefault();
         const button = document.getElementById("uploadButton");
@@ -194,6 +220,28 @@
           await loadDocuments();
         } catch (error) {
           urlResult.textContent = error.message;
+        } finally {
+          setBusy(button, false);
+        }
+      });
+
+      document.getElementById("pythonDocsForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = document.getElementById("pythonDocsButton");
+        setBusy(button, true, "Starting docs ingest");
+        try {
+          const response = await fetch("/api/ingest/docs/python", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: document.getElementById("pythonDocsUrl").value, replace: true }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || "Python docs ingest failed");
+          pythonDocsResult.textContent = JSON.stringify(data, null, 2);
+          setStatus("Ingesting docs");
+          await pollIngestJob(data.job_id);
+        } catch (error) {
+          pythonDocsResult.textContent = error.message;
         } finally {
           setBusy(button, false);
         }

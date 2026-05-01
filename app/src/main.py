@@ -4,6 +4,7 @@ import io
 import os
 import re
 import socket
+import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any
@@ -12,7 +13,7 @@ from urllib.robotparser import RobotFileParser
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel
@@ -48,6 +49,8 @@ VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "1536"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "8000"))
 INGEST_USER_AGENT = os.getenv("INGEST_USER_AGENT", "ragpipeline/0.1")
 MAX_URL_BYTES = int(os.getenv("MAX_URL_BYTES", str(5 * 1024 * 1024)))
+MAX_DOCS_ARCHIVE_BYTES = int(os.getenv("MAX_DOCS_ARCHIVE_BYTES", str(80 * 1024 * 1024)))
+MAX_DOCS_PAGES = int(os.getenv("MAX_DOCS_PAGES", "2000"))
 ALLOW_PRIVATE_URL_INGEST = os.getenv("ALLOW_PRIVATE_URL_INGEST", "false").lower() == "true"
 
 app = FastAPI(title="RAG Pipeline API", version="0.1.0")
@@ -62,6 +65,7 @@ app.add_middleware(
 qdrant = QdrantClient(url=QDRANT_URL)
 openai_client: OpenAI | None = None
 http_client = httpx.Client(timeout=120)
+ingest_jobs: dict[str, dict[str, Any]] = {}
 
 
 class QueryRequest(BaseModel):
@@ -72,6 +76,12 @@ class QueryRequest(BaseModel):
 class UrlIngestRequest(BaseModel):
     url: str
     replace: bool = True
+
+
+class PythonDocsIngestRequest(BaseModel):
+    url: str = "https://docs.python.org/3/"
+    replace: bool = True
+    max_pages: int | None = None
 
 
 class ExtractedHtml(HTMLParser):
@@ -208,9 +218,21 @@ def document_filter(doc_id: str) -> Filter:
     return Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=doc_id))])
 
 
-def delete_document_points(doc_id: str) -> None:
+def delete_by_filter(points_filter: Filter) -> None:
     ensure_collection()
-    qdrant.delete(collection_name=COLLECTION, points_selector=FilterSelector(filter=document_filter(doc_id)))
+    qdrant.delete(collection_name=COLLECTION, points_selector=FilterSelector(filter=points_filter))
+
+
+def delete_document_points(doc_id: str) -> None:
+    delete_by_filter(document_filter(doc_id))
+
+
+def collection_filter(collection_id: str) -> Filter:
+    return Filter(must=[FieldCondition(key="collection_id", match=MatchValue(value=collection_id))])
+
+
+def delete_collection_points(collection_id: str) -> None:
+    delete_by_filter(collection_filter(collection_id))
 
 
 def upsert_document_chunks(
@@ -224,6 +246,7 @@ def upsert_document_chunks(
     text: str,
     license_name: str | None = None,
     attribution: str | None = None,
+    collection_id: str | None = None,
     replace: bool = True,
 ) -> dict[str, Any]:
     chunks = chunk_text(text)
@@ -245,6 +268,7 @@ def upsert_document_chunks(
             vector=vector,
             payload={
                 "document_id": doc_id,
+                "collection_id": collection_id,
                 "source_type": source_type,
                 "source_uri": source_uri,
                 "filename": filename,
@@ -266,6 +290,7 @@ def upsert_document_chunks(
     qdrant.upsert(collection_name=COLLECTION, points=points)
     return {
         "document_id": doc_id,
+        "collection_id": collection_id,
         "chunks": len(points),
         "source_type": source_type,
         "source_uri": source_uri,
@@ -337,6 +362,171 @@ def fetch_url_text(url: str) -> tuple[str, str | None]:
     parser = ExtractedHtml()
     parser.feed(text)
     return parser.text, parser.title or None
+
+
+def normalize_docs_base_url(url: str) -> str:
+    url = validate_http_url(url)
+    parsed = urlparse(url)
+    if parsed.netloc != "docs.python.org":
+        raise HTTPException(status_code=400, detail="Python docs ingestion only supports docs.python.org URLs")
+    if not parsed.path.startswith("/3"):
+        raise HTTPException(status_code=400, detail="Python docs URL must be under https://docs.python.org/3/")
+    version_path = "/3/"
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) > 0 and re.fullmatch(r"3(?:\.\d+)?", parts[0]):
+        version_path = f"/{parts[0]}/"
+    return f"{parsed.scheme}://{parsed.netloc}{version_path}"
+
+
+def python_docs_collection_id(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    version = parsed.path.strip("/").replace("/", "-") or "3"
+    return f"python-docs-{version}"
+
+
+def discover_python_docs_html_zip(base_url: str) -> str:
+    download_url = urljoin(base_url, "download.html")
+    assert_robots_allowed(download_url)
+    try:
+        response = http_client.get(download_url, headers={"User-Agent": INGEST_USER_AGENT}, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=400, detail=f"Python docs download page failed with status {exc.response.status_code}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail="Python docs download page fetch failed") from exc
+
+    match = re.search(r"href=[\"']([^\"']*archives/python-[^\"']+-docs-html\.zip)[\"']", response.text)
+    if not match:
+        raise HTTPException(status_code=400, detail="Could not find the Python docs HTML zip download link")
+    return urljoin(download_url, match.group(1))
+
+
+def fetch_binary(url: str, max_bytes: int) -> bytes:
+    assert_robots_allowed(url)
+    try:
+        with http_client.stream("GET", url, headers={"User-Agent": INGEST_USER_AGENT}, follow_redirects=True) as response:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail="Docs archive is too large to ingest")
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=400, detail=f"Docs archive fetch failed with status {exc.response.status_code}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail="Docs archive fetch failed") from exc
+
+
+def archive_html_pages(payload: bytes, base_url: str, max_pages: int) -> list[dict[str, str]]:
+    pages: list[dict[str, str]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = sorted(archive.namelist())
+            html_names = [
+                name
+                for name in names
+                if name.endswith(".html")
+                and "/_static/" not in name
+                and "/_sources/" not in name
+                and "/.doctrees/" not in name
+                and not name.endswith("/search.html")
+            ]
+            if len(html_names) > max_pages:
+                raise HTTPException(status_code=413, detail=f"Docs archive has {len(html_names)} pages; max_pages is {max_pages}")
+            for name in html_names:
+                parts = name.split("/")
+                relative = "/".join(parts[1:]) if len(parts) > 1 else name
+                raw_html = archive.read(name).decode("utf-8", errors="ignore")
+                parser = ExtractedHtml()
+                parser.feed(raw_html)
+                text = parser.text
+                if not text.strip():
+                    continue
+                pages.append(
+                    {
+                        "path": relative,
+                        "url": urljoin(base_url, relative),
+                        "title": parser.title or relative,
+                        "text": text,
+                    }
+                )
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Downloaded docs archive was not a valid zip file") from exc
+    return pages
+
+
+def set_ingest_job(job_id: str, **updates: Any) -> None:
+    ingest_jobs.setdefault(job_id, {}).update(updates)
+
+
+def run_python_docs_ingest(job_id: str, request: PythonDocsIngestRequest) -> None:
+    try:
+        set_ingest_job(job_id, status="discovering", updated_at=utc_now())
+        base_url = normalize_docs_base_url(request.url)
+        collection_id = python_docs_collection_id(base_url)
+        max_pages = max(1, min(request.max_pages or MAX_DOCS_PAGES, MAX_DOCS_PAGES))
+        archive_url = discover_python_docs_html_zip(base_url)
+
+        set_ingest_job(
+            job_id,
+            status="downloading",
+            base_url=base_url,
+            archive_url=archive_url,
+            collection_id=collection_id,
+            updated_at=utc_now(),
+        )
+        payload = fetch_binary(archive_url, MAX_DOCS_ARCHIVE_BYTES)
+        pages = archive_html_pages(payload, base_url, max_pages)
+        if not pages:
+            raise HTTPException(status_code=400, detail="No HTML pages could be extracted from the Python docs archive")
+
+        if request.replace:
+            set_ingest_job(job_id, status="replacing", pages_total=len(pages), updated_at=utc_now())
+            delete_collection_points(collection_id)
+
+        total_chunks = 0
+        ingested_pages = 0
+        set_ingest_job(job_id, status="ingesting", pages_total=len(pages), pages_done=0, chunks=0, updated_at=utc_now())
+        for page in pages:
+            result = upsert_document_chunks(
+                doc_id=document_id("docs_page", page["url"]),
+                source_type="docs_page",
+                source_uri=page["url"],
+                title=page["title"],
+                filename=page["path"],
+                source=archive_url,
+                text=page["text"],
+                license_name="Python Software Foundation License Version 2; examples additionally Zero-Clause BSD",
+                attribution=page["url"],
+                collection_id=collection_id,
+                replace=False,
+            )
+            total_chunks += result["chunks"]
+            ingested_pages += 1
+            set_ingest_job(
+                job_id,
+                pages_done=ingested_pages,
+                chunks=total_chunks,
+                current_page=page["url"],
+                updated_at=utc_now(),
+            )
+
+        set_ingest_job(
+            job_id,
+            status="completed",
+            pages_done=ingested_pages,
+            pages_total=len(pages),
+            chunks=total_chunks,
+            completed_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    except HTTPException as exc:
+        set_ingest_job(job_id, status="failed", error=exc.detail, updated_at=utc_now())
+    except Exception as exc:  # pragma: no cover
+        set_ingest_job(job_id, status="failed", error=str(exc), updated_at=utc_now())
 
 
 def answer_with_openai(question: str, context: str) -> str:
@@ -433,6 +623,30 @@ def ingest_url(request: UrlIngestRequest) -> dict[str, Any]:
     )
 
 
+@app.post("/ingest/docs/python")
+def ingest_python_docs(request: PythonDocsIngestRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    job_id = str(uuid5(NAMESPACE_URL, f"python-docs:{request.url}:{utc_now()}"))
+    ingest_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "kind": "python_docs_archive",
+        "url": request.url,
+        "replace": request.replace,
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    background_tasks.add_task(run_python_docs_ingest, job_id, request)
+    return ingest_jobs[job_id]
+
+
+@app.get("/ingest/jobs/{job_id}")
+def get_ingest_job(job_id: str) -> dict[str, Any]:
+    job = ingest_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Ingest job not found")
+    return job
+
+
 @app.get("/documents")
 def list_documents() -> dict[str, Any]:
     ensure_collection()
@@ -455,6 +669,7 @@ def list_documents() -> dict[str, Any]:
                 doc_id,
                 {
                     "document_id": doc_id,
+                    "collection_id": payload.get("collection_id"),
                     "source_type": payload.get("source_type") or "upload",
                     "source_uri": payload.get("source_uri") or payload.get("filename"),
                     "title": payload.get("title") or payload.get("filename") or doc_id,
@@ -485,6 +700,12 @@ def delete_document(doc_id: str) -> dict[str, Any]:
     return {"document_id": doc_id, "deleted": True}
 
 
+@app.delete("/collections/{collection_id}")
+def delete_collection(collection_id: str) -> dict[str, Any]:
+    delete_collection_points(collection_id)
+    return {"collection_id": collection_id, "deleted": True}
+
+
 @app.post("/query")
 def query(request: QueryRequest) -> dict[str, Any]:
     ensure_collection()
@@ -495,6 +716,7 @@ def query(request: QueryRequest) -> dict[str, Any]:
             "score": hit.score,
             "filename": hit.payload.get("filename"),
             "document_id": hit.payload.get("document_id"),
+            "collection_id": hit.payload.get("collection_id"),
             "source_type": hit.payload.get("source_type"),
             "source_uri": hit.payload.get("source_uri"),
             "title": hit.payload.get("title"),

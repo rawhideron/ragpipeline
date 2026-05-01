@@ -117,8 +117,11 @@ The API exposes:
 
 - `POST /api/ingest` for `.txt`, `.md`, and `.pdf` uploads.
 - `POST /api/ingest/url` with JSON body `{"url": "https://example.com/page"}`.
+- `POST /api/ingest/docs/python` with JSON body `{"url": "https://docs.python.org/3/"}`.
+- `GET /api/ingest/jobs/{job_id}` to check docs archive ingestion progress.
 - `GET /api/documents` to list indexed documents.
 - `DELETE /api/documents/{document_id}` to delete all chunks for one document.
+- `DELETE /api/collections/{collection_id}` to delete a bundled docs ingest.
 - `POST /api/query` to query the indexed chunks.
 
 URL ingestion only accepts `http` and `https`, verifies `robots.txt` before
@@ -126,6 +129,10 @@ fetching the page, sends the `INGEST_USER_AGENT`, and limits fetched content to
 `MAX_URL_BYTES` bytes. Private, loopback, link-local, reserved, and multicast
 targets are blocked unless `ALLOW_PRIVATE_URL_INGEST=true` is set. It currently
 ingests one page at a time.
+
+Python docs ingestion uses the official `docs.python.org` HTML zip archive from
+the Python documentation download page. Each page in the archive is indexed as a
+separate document and grouped under a `collection_id` such as `python-docs-3`.
 
 ## ArgoCD
 
