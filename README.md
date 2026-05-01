@@ -155,6 +155,24 @@ cd /home/rongoodman/Projects/ragpipeline
 ./scripts/deploy-230.sh
 ```
 
+## Ship To Production
+
+Production changes should land on `main`. Use the helper script to run local
+sanity checks, commit, and push:
+
+```bash
+./scripts/ship-prod.sh "Describe the production change"
+```
+
+Pushing to `main` starts the GitHub Actions production image workflow. The
+workflow builds the API and frontend images, pushes them to GitHub Container
+Registry, updates the `k8s/176` manifests with commit-specific image tags, and
+pushes that manifest update back to `main`. ArgoCD watches `main` and then syncs
+the changed workload manifests to the production cluster.
+
+If the GHCR packages are private, create an image pull secret in the `rag`
+namespace or make the packages public so the cluster can pull them.
+
 ## Document Lifecycle And Website Ingestion
 
 Uploaded files and ingested URLs are stored in Qdrant with document-level

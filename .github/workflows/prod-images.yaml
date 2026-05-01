@@ -1,0 +1,91 @@
+name: Build production images
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-update-manifests:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    env:
+      API_IMAGE: ghcr.io/${{ github.repository_owner }}/ragpipeline-api
+      FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/ragpipeline-frontend
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref_name }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ env.IMAGE_TAG }}
+            ${{ env.API_IMAGE }}:main
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}
+            ${{ env.FRONTEND_IMAGE }}:main
+
+      - name: Update workload manifests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          api_image = f"{os.environ['API_IMAGE']}:{os.environ['IMAGE_TAG']}"
+          frontend_image = f"{os.environ['FRONTEND_IMAGE']}:{os.environ['IMAGE_TAG']}"
+
+          for filename in ("k8s/176/03-apis.yaml", "k8s/176/04-frontend.yaml"):
+              path = Path(filename)
+              text = path.read_text()
+              lines = []
+              for line in text.splitlines():
+                  stripped = line.strip()
+                  if stripped.startswith("image:"):
+                      indent = line[: len(line) - len(line.lstrip())]
+                      if "ragpipeline-api" in stripped:
+                          line = f"{indent}image: {api_image}"
+                      elif "ragpipeline-frontend" in stripped:
+                          line = f"{indent}image: {frontend_image}"
+                  lines.append(line)
+              path.write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Commit manifest image update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/176/03-apis.yaml k8s/176/04-frontend.yaml
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit."
+          else
+            git commit -m "Deploy images for ${IMAGE_TAG} [skip ci]"
+            git push
+          fi
