@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ragpipeline-frontend:0.1.0
+          image: ragpipeline-frontend:0.1.1-lifecycle
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
