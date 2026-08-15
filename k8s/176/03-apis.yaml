@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/rawhideron/ragpipeline-api:ee4064137f67ba3c84b57374fb453a2f5145e321
+          image: ghcr.io/rawhideron/ragpipeline-api:8945ed3328a0607b36e0b737f49640680d55d067
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -61,7 +61,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/rawhideron/ragpipeline-api:ee4064137f67ba3c84b57374fb453a2f5145e321
+          image: ghcr.io/rawhideron/ragpipeline-api:8945ed3328a0607b36e0b737f49640680d55d067
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
