@@ -173,29 +173,6 @@ the changed workload manifests to the production cluster.
 If the GHCR packages are private, create an image pull secret in the `rag`
 namespace or make the packages public so the cluster can pull them.
 
-## Code Quality And Security Scanning
-
-Every push to `main` and every pull request against `main` runs
-`.github/workflows/code-quality.yaml`, which:
-
-- Scans the codebase with SonarQube (`sonar-project.properties` at the repo
-  root defines the project key and source paths) and enforces the quality
-  gate.
-- Runs OWASP Dependency-Check against `app/requirements.txt` to catch known
-  CVEs in Python dependencies, uploading the report as a build artifact and
-  the SARIF results to GitHub code scanning.
-
-This requires two repository secrets for the self-hosted SonarQube server:
-
-```bash
-gh secret set SONAR_HOST_URL -R rawhideron/ragpipeline
-gh secret set SONAR_TOKEN -R rawhideron/ragpipeline
-```
-
-`SONAR_HOST_URL` is the base URL of your SonarQube instance, and
-`SONAR_TOKEN` is a user or project analysis token generated in SonarQube
-under **My Account > Security**.
-
 ## Document Lifecycle And Website Ingestion
 
 Uploaded files and ingested URLs are stored in Qdrant with document-level
