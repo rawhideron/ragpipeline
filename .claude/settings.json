@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" https://ragpipeline.duckdns.org/ --max-time 10)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" https://ragpipeline.duckdns.org/login --max-time 10)",
+      "Bash(curl -s -D - -o /dev/null https://ragpipeline.duckdns.org/ --max-time 10)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" \"https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline/protocol/openid-connect/auth?client_id=ragpipeline&redirect_uri=https%3A%2F%2Fragpipeline.duckdns.org%2Foauth2%2Fcallback&response_type=code&scope=openid+email+profile\" --max-time 10)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" \"https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline\" --max-time 10)",
+      "Bash(curl -s \"https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline\" --max-time 10)"
+    ]
+  }
+}
