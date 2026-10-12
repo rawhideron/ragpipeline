@@ -17,6 +17,24 @@ spec:
         - name: api
           image: ghcr.io/rawhideron/ragpipeline-api:591d4dfea3b7903d77ad975c10422c0aca3abc0c
           imagePullPolicy: IfNotPresent
+          env:
+            # Traces go to the OTel agent on this node, which forwards to Tempo
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_SERVICE_NAME
+              value: ingestion-api
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://$(NODE_IP):4317
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+            - name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
+              value: health
           envFrom:
             - configMapRef:
                 name: rag-config
@@ -63,6 +81,24 @@ spec:
         - name: api
           image: ghcr.io/rawhideron/ragpipeline-api:591d4dfea3b7903d77ad975c10422c0aca3abc0c
           imagePullPolicy: IfNotPresent
+          env:
+            # Traces go to the OTel agent on this node, which forwards to Tempo
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_SERVICE_NAME
+              value: rag-api
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://$(NODE_IP):4317
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+            - name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
+              value: health
           envFrom:
             - configMapRef:
                 name: rag-config
