@@ -395,10 +395,10 @@ def discover_python_docs_html_zip(base_url: str) -> str:
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=400, detail="Python docs download page fetch failed") from exc
 
-    match = re.search(r"href=[\"']([^\"']*archives/python-[^\"']+-docs-html\.zip)[\"']", response.text)
-    if not match:
-        raise HTTPException(status_code=400, detail="Could not find the Python docs HTML zip download link")
-    return urljoin(download_url, match.group(1))
+    for href in re.findall(r"href=[\"']([^\"']*)[\"']", response.text):
+        if "archives/python-" in href and href.endswith("-docs-html.zip"):
+            return urljoin(download_url, href)
+    raise HTTPException(status_code=400, detail="Could not find the Python docs HTML zip download link")
 
 
 def fetch_binary(url: str, max_bytes: int) -> bytes:
