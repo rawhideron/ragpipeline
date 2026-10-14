@@ -7,7 +7,7 @@ import socket
 import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from uuid import NAMESPACE_URL, uuid5
@@ -589,8 +589,8 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/ingest")
-async def ingest(file: UploadFile = File(...), source: str = Form(default="upload")) -> dict[str, Any]:
+@app.post("/ingest", responses={400: {"description": "No text could be extracted from the document"}})
+async def ingest(file: Annotated[UploadFile, File()], source: Annotated[str, Form()] = "upload") -> dict[str, Any]:
     payload = await file.read()
     filename = file.filename or "document"
     text = extract_text(filename, payload)
@@ -606,7 +606,14 @@ async def ingest(file: UploadFile = File(...), source: str = Form(default="uploa
     )
 
 
-@app.post("/ingest/url")
+@app.post(
+    "/ingest/url",
+    responses={
+        400: {"description": "Invalid URL, fetch failed, or no text could be extracted"},
+        403: {"description": "robots.txt does not allow ingestion of this URL"},
+        413: {"description": "URL content is too large to ingest"},
+    },
+)
 def ingest_url(request: UrlIngestRequest) -> dict[str, Any]:
     url = validate_http_url(request.url)
     text, title = fetch_url_text(url)
@@ -639,7 +646,7 @@ def ingest_python_docs(request: PythonDocsIngestRequest, background_tasks: Backg
     return ingest_jobs[job_id]
 
 
-@app.get("/ingest/jobs/{job_id}")
+@app.get("/ingest/jobs/{job_id}", responses={404: {"description": "Ingest job not found"}})
 def get_ingest_job(job_id: str) -> dict[str, Any]:
     job = ingest_jobs.get(job_id)
     if not job:
@@ -647,10 +654,7 @@ def get_ingest_job(job_id: str) -> dict[str, Any]:
     return job
 
 
-@app.get("/documents")
-def list_documents() -> dict[str, Any]:
-    ensure_collection()
-    documents: dict[str, dict[str, Any]] = {}
+def iter_collection_payloads():
     offset = None
     while True:
         points, offset = qdrant.scroll(
@@ -661,36 +665,48 @@ def list_documents() -> dict[str, Any]:
             with_vectors=False,
         )
         for point in points:
-            payload = point.payload or {}
-            doc_id = payload.get("document_id")
-            if not doc_id:
-                continue
-            current = documents.setdefault(
-                doc_id,
-                {
-                    "document_id": doc_id,
-                    "collection_id": payload.get("collection_id"),
-                    "source_type": payload.get("source_type") or "upload",
-                    "source_uri": payload.get("source_uri") or payload.get("filename"),
-                    "title": payload.get("title") or payload.get("filename") or doc_id,
-                    "filename": payload.get("filename"),
-                    "source": payload.get("source"),
-                    "content_hash": payload.get("content_hash"),
-                    "version_id": payload.get("version_id"),
-                    "ingested_at": payload.get("ingested_at"),
-                    "updated_at": payload.get("updated_at"),
-                    "license": payload.get("license"),
-                    "attribution": payload.get("attribution"),
-                    "chunks": 0,
-                },
-            )
-            current["chunks"] += 1
-            for key in ("ingested_at", "updated_at"):
-                value = payload.get(key)
-                if value and (not current.get(key) or value > current[key]):
-                    current[key] = value
+            yield point.payload or {}
         if offset is None:
-            break
+            return
+
+
+def new_document_summary(doc_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "document_id": doc_id,
+        "collection_id": payload.get("collection_id"),
+        "source_type": payload.get("source_type") or "upload",
+        "source_uri": payload.get("source_uri") or payload.get("filename"),
+        "title": payload.get("title") or payload.get("filename") or doc_id,
+        "filename": payload.get("filename"),
+        "source": payload.get("source"),
+        "content_hash": payload.get("content_hash"),
+        "version_id": payload.get("version_id"),
+        "ingested_at": payload.get("ingested_at"),
+        "updated_at": payload.get("updated_at"),
+        "license": payload.get("license"),
+        "attribution": payload.get("attribution"),
+        "chunks": 0,
+    }
+
+
+def merge_latest_timestamps(current: dict[str, Any], payload: dict[str, Any]) -> None:
+    for key in ("ingested_at", "updated_at"):
+        value = payload.get(key)
+        if value and (not current.get(key) or value > current[key]):
+            current[key] = value
+
+
+@app.get("/documents")
+def list_documents() -> dict[str, Any]:
+    ensure_collection()
+    documents: dict[str, dict[str, Any]] = {}
+    for payload in iter_collection_payloads():
+        doc_id = payload.get("document_id")
+        if not doc_id:
+            continue
+        current = documents.setdefault(doc_id, new_document_summary(doc_id, payload))
+        current["chunks"] += 1
+        merge_latest_timestamps(current, payload)
     return {"documents": sorted(documents.values(), key=lambda item: item.get("updated_at") or "", reverse=True)}
 
 
@@ -706,7 +722,7 @@ def delete_collection(collection_id: str) -> dict[str, Any]:
     return {"collection_id": collection_id, "deleted": True}
 
 
-@app.post("/query")
+@app.post("/query", responses={500: {"description": "The configured generation provider is unavailable"}})
 def query(request: QueryRequest) -> dict[str, Any]:
     ensure_collection()
     query_vector = embed_texts([request.question])[0]

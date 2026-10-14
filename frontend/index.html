@@ -102,7 +102,7 @@
       </div>
     </main>
 
-    <script>
+    <script type="module">
       const statusEl = document.getElementById("status");
       const uploadResult = document.getElementById("uploadResult");
       const urlResult = document.getElementById("urlResult");
@@ -275,7 +275,7 @@
       });
 
       document.getElementById("refreshButton").addEventListener("click", loadDocuments);
-      loadDocuments();
+      await loadDocuments();
     </script>
   </body>
 </html>
