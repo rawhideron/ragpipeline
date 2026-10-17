@@ -261,10 +261,10 @@
           const data = await response.json();
           if (!response.ok) throw new Error(data.detail || "Query failed");
           answerEl.textContent = data.answer;
-          for (const source of data.sources || []) {
+          for (const [index, source] of (data.sources || []).entries()) {
             const item = document.createElement("div");
             item.className = "source";
-            item.innerHTML = `<strong>${escapeHtml(source.title || source.filename || source.source_uri || "Document")} - chunk ${source.chunk_index}</strong><span>${escapeHtml(source.text || "")}</span>`;
+            item.innerHTML = `<strong>[${index + 1}] ${escapeHtml(source.title || source.filename || source.source_uri || "Document")} - chunk ${source.chunk_index}</strong><span>${escapeHtml(source.text || "")}</span>`;
             sourcesEl.appendChild(item);
           }
         } catch (error) {
