@@ -10,7 +10,7 @@ Phase 1 RAG stack for the homelab.
 - Keycloak: `https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline`
 - Vector database: Qdrant
 - Generation provider: OpenAI by default, Anthropic optional
-- Ollama: defined but kept offline with `replicas: 0`
+- Ollama: GPU Deployment `rag/ollama` (see the top-level README)
 
 ## What Phase 1 Deploys
 

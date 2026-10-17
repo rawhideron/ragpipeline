@@ -1,0 +1,145 @@
+# Ollama on the RTX 3070, shared with the MLPipeline training DAG.
+#
+# The gpu-exclusive admission policy on this cluster (MLPipeline repo,
+# ops/zephyrus/gpu-exclusive-policy.yaml) allows only one GPU pod at a time, so
+# the mlpipeline_training DAG scales this Deployment to 0 before train_model and
+# back to 1 afterwards (see 06-ollama-gpu-handoff-rbac.yaml). `replicas` is
+# deliberately left out so ArgoCD selfHeal does not undo that scale-down.
+#
+# Models live on the static PV `ollama-models-shared` (MLPipeline repo,
+# ops/zephyrus/ollama-models-pv.yaml), a host directory bind-mounted into both
+# GPU nodes, so the pod can run on either node without re-pulling.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: rag
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: ollama-models-shared
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: rag
+spec:
+  # Only one GPU pod may exist; a rolling update would leave the new pod
+  # Pending behind the old one's anti-affinity forever.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+        mlpipeline.io/gpu-exclusive: "true"
+    spec:
+      runtimeClassName: nvidia
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: mlpipeline.io/gpu-pool
+                    operator: Exists
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: mlpipeline.io/gpu-role
+                    operator: In
+                    values: ["primary"]
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  mlpipeline.io/gpu-exclusive: "true"
+              topologyKey: mlpipeline.io/gpu-pool
+              namespaceSelector: {}
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.17.7
+          # Serve, then pull any configured model missing from the volume (a
+          # no-op once the PV is seeded). The trap forwards SIGTERM so a
+          # scale-down releases the GPU quickly instead of after the grace period.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /bin/ollama serve & pid=$!
+              trap 'kill -TERM $pid' TERM INT
+              until /bin/ollama list >/dev/null 2>&1; do sleep 1; done
+              for m in "$OLLAMA_CHAT_MODEL" "$OLLAMA_EMBEDDING_MODEL"; do
+                /bin/ollama list | grep -q "^$m" || /bin/ollama pull "$m" || echo "pull of $m failed"
+              done
+              wait $pid; wait $pid
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+            # The GPU is held by this pod anyway; keep models resident so the
+            # first query after an idle spell does not pay the load time.
+            - name: OLLAMA_KEEP_ALIVE
+              value: 24h
+            - name: OLLAMA_CHAT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: rag-config
+                  key: OLLAMA_CHAT_MODEL
+            - name: OLLAMA_EMBEDDING_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: rag-config
+                  key: OLLAMA_EMBEDDING_MODEL
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: 11434
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: rag
+spec:
+  selector:
+    app: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
