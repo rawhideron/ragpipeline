@@ -55,7 +55,7 @@ flowchart LR
 
 The active Phase 1 config uses the in-cluster Ollama service (`http://ollama:11434`):
 
-- Chat model: `qwen2.5:1.5b`
+- Chat model: `qwen3:8b` (5.2 GB; loads 100% on the GPU at the default 4096-token context, about 6 GB of VRAM)
 - Embedding model: `nomic-embed-text`
 - Qdrant collection: `rag_documents_ollama`
 - Vector size: `768`
