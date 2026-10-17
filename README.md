@@ -9,9 +9,9 @@ Phase 1 RAG stack for the homelab.
 - Public URL: `https://ragpipeline.duckdns.org`
 - Keycloak: `https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline`
 - Vector database: Qdrant
-- Generation provider: Ollama on host `176`
+- Generation provider: Ollama in namespace `rag` on host `176`
 - Embeddings provider: Ollama `nomic-embed-text`
-- Ollama: host systemd service on `176`, bound to `0.0.0.0:11434`; the in-cluster Ollama Deployment is kept offline with `replicas: 0`
+- Ollama: Deployment `rag/ollama` on the RTX 3070 (`k8s/176/05-ollama.yaml`); scaled to 0 by the MLPipeline training DAG while it trains
 
 ## What Phase 1 Deploys
 
@@ -43,7 +43,7 @@ flowchart LR
   ingest --> qdrant[(Qdrant<br/>rag_documents_ollama)]
   docs --> qdrant
   ragapi --> qdrant
-  ingest --> ollama[Ollama on host 176<br/>nomic-embed-text]
+  ingest --> ollama[Ollama<br/>namespace rag<br/>nomic-embed-text]
   ragapi --> ollama
   ollama --> gpu[NVIDIA RTX 3070 Laptop GPU]
 
@@ -53,7 +53,7 @@ flowchart LR
 
 ## LLM Provider Notes
 
-The active Phase 1 config uses the host `176` Ollama service:
+The active Phase 1 config uses the in-cluster Ollama service (`http://ollama:11434`):
 
 - Chat model: `qwen2.5:1.5b`
 - Embedding model: `nomic-embed-text`
@@ -65,10 +65,18 @@ through CUDA, so small models are a reasonable fit. Larger 7B-class models may
 fit only with heavy quantization and will be tight because system RAM is already
 under pressure.
 
-The Kubernetes Ollama Deployment remains defined but scaled to zero. Kind GPU
-device scheduling is not active yet: the NVIDIA device plugin runs, but the Kind
-nodes do not advertise `nvidia.com/gpu` until the NVIDIA container runtime/toolkit
-is wired into the Kind node containerd runtime.
+Ollama runs as a GPU pod on the GPU-pool Kind nodes (`reunion-worker`, with
+`reunion-worker2` as fallback). The cluster's `gpu-exclusive` admission policy
+(MLPipeline repo, `ops/zephyrus/gpu-exclusive-policy.yaml`) allows one GPU pod
+at a time, so the pod carries the `mlpipeline.io/gpu-exclusive=true` label, the
+pool anti-affinity and a `Recreate` strategy. The MLPipeline `mlpipeline_training`
+DAG scales it to 0 for its ~10 minute training step and back afterwards, using
+the Role in `k8s/176/06-ollama-gpu-handoff-rbac.yaml`; queries fail during that
+window. The manifest omits `replicas` so ArgoCD self-heal leaves that scaling alone.
+
+Models are stored on the static PV `ollama-models-shared` (MLPipeline repo,
+`ops/zephyrus/ollama-models-pv.yaml`), a host directory shared by both GPU nodes.
+On start the pod pulls any configured model missing from it.
 
 ## OpenAI Billing Reality Check
 

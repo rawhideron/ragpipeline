@@ -1,0 +1,34 @@
+# Lets the MLPipeline Airflow workers (KubernetesExecutor pods run as
+# mlpipeline/airflow) scale Ollama down before train_model and back up after,
+# so the two never contend for the single GPU.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ollama-gpu-handoff
+  namespace: rag
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["ollama"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: ["ollama"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ollama-gpu-handoff
+  namespace: rag
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ollama-gpu-handoff
+subjects:
+  - kind: ServiceAccount
+    name: airflow
+    namespace: mlpipeline
