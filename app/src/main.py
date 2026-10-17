@@ -1,11 +1,13 @@
 import hashlib
 import ipaddress
 import io
+import json
 import os
 import re
 import socket
 import zipfile
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from html.parser import HTMLParser
 from typing import Annotated, Any
 from urllib.parse import urljoin, urlparse
@@ -26,6 +28,7 @@ from qdrant_client.http.models import (
     FilterSelector,
     MatchValue,
     PointStruct,
+    PointVectors,
     VectorParams,
 )
 
@@ -47,6 +50,18 @@ OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:1.5b")
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "1536"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "8000"))
+# Chunks scoring below this cosine similarity are not shown to the model. With
+# nomic-embed-text, on-topic questions score ~0.75+ and off-topic ones <= ~0.55.
+MIN_RELEVANCE_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.65"))
+OLLAMA_THINK = os.getenv("OLLAMA_THINK", "false").lower() == "true"
+VERIFY_ANSWERS = os.getenv("VERIFY_ANSWERS", "true").lower() == "true"
+NO_ANSWER = "I could not find this in the uploaded documents."
+SYSTEM_PROMPT = (
+    "You answer questions using only the numbered sources supplied by the user. "
+    "Cite the source number in square brackets, like [1], after every statement "
+    "you make. Do not use outside knowledge. If the sources do not answer the "
+    "question, reply exactly: " + NO_ANSWER
+)
 INGEST_USER_AGENT = os.getenv("INGEST_USER_AGENT", "ragpipeline/0.1")
 MAX_URL_BYTES = int(os.getenv("MAX_URL_BYTES", str(5 * 1024 * 1024)))
 MAX_DOCS_ARCHIVE_BYTES = int(os.getenv("MAX_DOCS_ARCHIVE_BYTES", str(80 * 1024 * 1024)))
@@ -160,7 +175,17 @@ def embed_with_openai(texts: list[str]) -> list[list[float]]:
     return [item.embedding for item in response.data]
 
 
-def embed_with_ollama(texts: list[str]) -> list[list[float]]:
+def prepare_for_nomic(texts: list[str], kind: str) -> list[str]:
+    # nomic-embed-text has an uncased vocabulary and Ollama does not lowercase
+    # for it, so every capitalised word became [UNK] ("Kubernetes" and "Docker"
+    # embedded identically). It also expects task prefixes on its inputs.
+    prefix = "search_query: " if kind == "query" else "search_document: "
+    return [prefix + text.lower() for text in texts]
+
+
+def embed_with_ollama(texts: list[str], kind: str = "document") -> list[list[float]]:
+    if "nomic" in OLLAMA_EMBEDDING_MODEL:
+        texts = prepare_for_nomic(texts, kind)
     vectors: list[list[float]] = []
     for text in texts:
         response = http_client.post(
@@ -172,9 +197,9 @@ def embed_with_ollama(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def embed_texts(texts: list[str], kind: str = "document") -> list[list[float]]:
     if EMBEDDING_PROVIDER == "ollama":
-        return embed_with_ollama(texts)
+        return embed_with_ollama(texts, kind)
     return embed_with_openai(texts)
 
 
@@ -535,12 +560,9 @@ def answer_with_openai(question: str, context: str) -> str:
         input=[
             {
                 "role": "system",
-                "content": (
-                    "Answer using only the supplied context. If the context does "
-                    "not contain the answer, say you do not know from the uploaded documents."
-                ),
+                "content": SYSTEM_PROMPT,
             },
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+            {"role": "user", "content": f"Sources:\n{context}\n\nQuestion: {question}"},
         ],
     )
     return response.output_text
@@ -553,11 +575,9 @@ def answer_with_anthropic(question: str, context: str) -> str:
     message = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=800,
-        system=(
-            "Answer using only the supplied context. If the context does not contain "
-            "the answer, say you do not know from the uploaded documents."
-        ),
-        messages=[{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}],
+        temperature=0,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": f"Sources:\n{context}\n\nQuestion: {question}"}],
     )
     return "\n".join(block.text for block in message.content if getattr(block, "type", "") == "text")
 
@@ -568,15 +588,14 @@ def answer_with_ollama(question: str, context: str) -> str:
         json={
             "model": OLLAMA_CHAT_MODEL,
             "stream": False,
+            "think": OLLAMA_THINK,
+            "options": {"temperature": 0},
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "Answer using only the supplied context. If the context does not contain "
-                        "the answer, say you do not know from the uploaded documents."
-                    ),
+                    "content": SYSTEM_PROMPT,
                 },
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+                {"role": "user", "content": f"Sources:\n{context}\n\nQuestion: {question}"},
             ],
         },
     )
@@ -670,6 +689,34 @@ def iter_collection_payloads():
             return
 
 
+def reembed_collection(batch_size: int = 32) -> int:
+    """Recompute every stored chunk's vector from its payload text.
+
+    Needed once whenever the embedding input changes (model, lowercasing,
+    prefixes); the stored texts and payloads are left as they are.
+    """
+    offset = None
+    total = 0
+    while True:
+        points, offset = qdrant.scroll(
+            collection_name=COLLECTION,
+            limit=batch_size,
+            offset=offset,
+            with_payload=["text"],
+            with_vectors=False,
+        )
+        points = [point for point in points if (point.payload or {}).get("text")]
+        if points:
+            vectors = embed_texts([point.payload["text"] for point in points], kind="document")
+            qdrant.update_vectors(
+                collection_name=COLLECTION,
+                points=[PointVectors(id=point.id, vector=vector) for point, vector in zip(points, vectors)],
+            )
+            total += len(points)
+        if offset is None:
+            return total
+
+
 def new_document_summary(doc_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "document_id": doc_id,
@@ -722,11 +769,118 @@ def delete_collection(collection_id: str) -> dict[str, Any]:
     return {"collection_id": collection_id, "deleted": True}
 
 
+def format_sources(sources: list[dict[str, Any]]) -> str:
+    blocks = []
+    for number, source in enumerate(sources, start=1):
+        label = source["title"] or source["filename"] or "Document"
+        if source["source_uri"]:
+            label += f" ({source['source_uri']})"
+        blocks.append(f"[{number}] {label}\n{source['text'] or ''}")
+    return "\n\n".join(blocks)[:MAX_CONTEXT_CHARS]
+
+
+def split_sentences(text: str) -> list[str]:
+    # A sentence ends at . ! or ? followed by whitespace, and keeps any citations
+    # written after the full stop ("It scales. [1]").
+    pattern = r"\S.*?(?:[.!?](?:\s*\[\d+\])*(?=\s|$)|$)"
+    return [part.strip() for part in re.findall(pattern, text.strip(), flags=re.S) if part.strip()]
+
+
+def supported_sentences_with_ollama(context: str, sentences: list[str]) -> list[int]:
+    numbered = "\n".join(f"{index}. {sentence}" for index, sentence in enumerate(sentences, start=1))
+    response = http_client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": OLLAMA_CHAT_MODEL,
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0},
+            "format": {
+                "type": "object",
+                "properties": {
+                    "checks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "sentence": {"type": "integer"},
+                                "quote": {"type": "string"},
+                                "supported": {"type": "boolean"},
+                            },
+                            "required": ["sentence", "quote", "supported"],
+                        },
+                    }
+                },
+                "required": ["checks"],
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You check answers against sources. For each numbered sentence, copy "
+                        "word for word the passage from the sources that states it, and set "
+                        "supported to true only if that passage alone says what the sentence "
+                        "says. Background knowledge does not count. If no passage states it, "
+                        "use an empty quote and supported false."
+                    ),
+                },
+                {"role": "user", "content": f"Sources:\n{context}\n\nSentences:\n{numbered}"},
+            ],
+        },
+    )
+    response.raise_for_status()
+    checks = json.loads(response.json()["message"]["content"]).get("checks", [])
+    # A sentence counts only if the checker says so and its quote is really in
+    # the sources, so it has to point at actual evidence.
+    return [
+        check["sentence"]
+        for check in checks
+        if check.get("supported") is True
+        and isinstance(check.get("sentence"), int)
+        and quote_in_sources(check.get("quote", ""), context)
+    ]
+
+
+def normalise(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def quote_in_sources(quote: str, context: str) -> bool:
+    # Mostly-verbatim is enough: quotes can span a chunk boundary or swap
+    # "Kubernetes gives" for "It gives".
+    needle, haystack = normalise(quote), normalise(context)
+    if len(needle) < 20:
+        return False
+    match = SequenceMatcher(None, needle, haystack, autojunk=False).find_longest_match(
+        0, len(needle), 0, len(haystack)
+    )
+    return match.size >= min(80, 0.6 * len(needle))
+
+
+def verify_answer(context: str, answer: str) -> str:
+    # Keep only sentences the model confirms against the sources. The checker
+    # returns sentence numbers, not text, so it cannot add claims of its own.
+    sentences = split_sentences(answer)
+    supported = set(supported_sentences_with_ollama(context, sentences))
+    kept = [sentence for index, sentence in enumerate(sentences, start=1) if index in supported]
+    return " ".join(kept)
+
+
+def cites_a_source(answer: str, source_count: int) -> bool:
+    # An answer that cites none of the supplied sources is not grounded in them.
+    cited = {int(number) for number in re.findall(r"\[(\d+)\]", answer)}
+    return any(1 <= number <= source_count for number in cited)
+
+
 @app.post("/query", responses={500: {"description": "The configured generation provider is unavailable"}})
 def query(request: QueryRequest) -> dict[str, Any]:
     ensure_collection()
-    query_vector = embed_texts([request.question])[0]
+    query_vector = embed_texts([request.question], kind="query")[0]
     hits = search_points(query_vector, max(1, min(request.top_k, 12)))
+    hits = [hit for hit in hits if hit.score >= MIN_RELEVANCE_SCORE]
+    if not hits:
+        # Nothing relevant: refuse here instead of letting the model improvise.
+        return {"answer": NO_ANSWER, "sources": []}
     sources = [
         {
             "score": hit.score,
@@ -743,11 +897,15 @@ def query(request: QueryRequest) -> dict[str, Any]:
         }
         for hit in hits
     ]
-    context = "\n\n".join(source["text"] or "" for source in sources)[:MAX_CONTEXT_CHARS]
+    context = format_sources(sources)
     if GENERATION_PROVIDER == "anthropic":
         answer = answer_with_anthropic(request.question, context)
     elif GENERATION_PROVIDER == "ollama":
         answer = answer_with_ollama(request.question, context)
+        if VERIFY_ANSWERS and answer.strip() != NO_ANSWER:
+            answer = verify_answer(context, answer)
     else:
         answer = answer_with_openai(request.question, context)
+    if not cites_a_source(answer, len(sources)):
+        answer = NO_ANSWER
     return {"answer": answer, "sources": sources}
