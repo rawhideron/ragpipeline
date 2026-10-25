@@ -28,3 +28,41 @@ spec:
                 name: rag-oauth2-proxy
                 port:
                   name: http
+---
+# Envoy Gateway replacement for the Ingress above
+# (rawhideron/goodman_reunion#764). It carries traffic only after that
+# migration's cutover on 230; until then nginx serves. Fields the API
+# server would default are written out so ArgoCD doesn't report it
+# OutOfSync. rag-oauth2-proxy keeps doing auth and proxying, as today.
+# nginx's buffer and body-size settings need no equivalent: Envoy streams
+# bodies and allows 60 KiB of headers.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ragpipeline
+  namespace: rag
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: reunion-gateway
+      namespace: envoy-gateway-system
+      sectionName: https-ragpipeline
+  hostnames:
+    - ragpipeline.duckdns.org
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: rag-oauth2-proxy
+          port: 4180
+          weight: 1
+      # nginx has no total-time cap; Envoy's default is 15s for the whole
+      # request (too short for LLM answers). The gateway's 60s idle timeout
+      # matches nginx's default proxy-read-timeout.
+      timeouts:
+        request: 0s
