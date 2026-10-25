@@ -1,41 +1,8 @@
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ragpipeline
-  namespace: rag
-  annotations:
-    cert-manager.io/cluster-issuer: reunion-letsencrypt
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
-    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
-    nginx.ingress.kubernetes.io/proxy-busy-buffers-size: "32k"
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - ragpipeline.duckdns.org
-      secretName: ragpipeline-tls
-  rules:
-    - host: ragpipeline.duckdns.org
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: rag-oauth2-proxy
-                port:
-                  name: http
----
-# Envoy Gateway replacement for the Ingress above
-# (rawhideron/goodman_reunion#764). It carries traffic only after that
-# migration's cutover on 230; until then nginx serves. Fields the API
-# server would default are written out so ArgoCD doesn't report it
-# OutOfSync. rag-oauth2-proxy keeps doing auth and proxying, as today.
-# nginx's buffer and body-size settings need no equivalent: Envoy streams
-# bodies and allows 60 KiB of headers.
+# ragpipeline.duckdns.org on 230's Envoy Gateway (reunion-gateway, listener
+# https-ragpipeline), which replaced ingress-nginx in
+# rawhideron/goodman_reunion#764. Fields the API server would default are
+# written out so ArgoCD doesn't report it OutOfSync. rag-oauth2-proxy does
+# auth and proxying.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
