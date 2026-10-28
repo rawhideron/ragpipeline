@@ -6,5 +6,5 @@ opentelemetry-distro==0.61b0
 opentelemetry-exporter-otlp==1.40.0
 pypdf==6.20.0
 python-multipart==0.0.31
-qdrant-client==1.16.1
+qdrant-client==1.20.0
 uvicorn[standard]==0.38.0

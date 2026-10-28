@@ -17,6 +17,10 @@ metadata:
   namespace: rag
 spec:
   replicas: 1
+  # One RWO volume: a rolling update would run two Qdrant processes on the
+  # same storage at once.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: qdrant
@@ -27,7 +31,7 @@ spec:
     spec:
       containers:
         - name: qdrant
-          image: qdrant/qdrant:v1.13.4
+          image: qdrant/qdrant:v1.20.0
           ports:
             - containerPort: 6333
           volumeMounts:
