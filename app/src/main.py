@@ -782,7 +782,8 @@ def format_sources(sources: list[dict[str, Any]]) -> str:
 def split_sentences(text: str) -> list[str]:
     # A sentence ends at . ! or ? followed by whitespace, and keeps any citations
     # written after the full stop ("It scales. [1]").
-    pattern = r"\S.*?(?:[.!?](?:\s*\[\d+\])*(?=\s|$)|$)"
+    # Text after the last full stop is one final "sentence" (second alternative).
+    pattern = r"\S.*?[.!?](?:\s*\[\d+\])*(?=\s|$)|\S.*"
     return [part.strip() for part in re.findall(pattern, text.strip(), flags=re.S) if part.strip()]
 
 
