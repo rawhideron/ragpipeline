@@ -209,3 +209,18 @@ def test_query_refuses_when_the_checker_confirms_nothing(monkeypatch, client):
 def test_quote_in_sources(quote, expected):
     context = "[1] Kubernetes\nKubernetes gives Pods their own IP addresses and a single DNS name for a set of Pods."
     assert main.quote_in_sources(quote, context) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", []),
+        ("One. Two!", ["One.", "Two!"]),
+        ("It scales. [1] Next one? [2][3] Done", ["It scales. [1]", "Next one? [2][3]", "Done"]),
+        ("No ending", ["No ending"]),
+        ("a.b c.", ["a.b c."]),
+        ("Line one.\nLine two.\n\nThird", ["Line one.", "Line two.", "Third"]),
+    ],
+)
+def test_split_sentences(text, expected):
+    assert main.split_sentences(text) == expected
