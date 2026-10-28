@@ -4,7 +4,7 @@ httpx==0.28.1
 openai==2.14.0
 opentelemetry-distro==0.61b0
 opentelemetry-exporter-otlp==1.40.0
-pypdf==6.20.0
+pypdf==6.21.2
 python-multipart==0.0.31
 qdrant-client==1.20.0
 uvicorn[standard]==0.38.0
