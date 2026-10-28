@@ -60,6 +60,38 @@ The active Phase 1 config uses the in-cluster Ollama service (`http://ollama:114
 - Qdrant collection: `rag_documents_ollama`
 - Vector size: `768`
 
+### How answers stay grounded
+
+`/api/query` refuses rather than guesses:
+
+1. **Embeddings.** Text is lowercased and given nomic's `search_query: ` /
+   `search_document: ` prefixes before embedding. Ollama does not lowercase for
+   `nomic-embed-text` (an uncased model), so without this every capitalised word
+   became an unknown token and "Kubernetes" and "Docker" embedded identically.
+2. **Relevance cutoff.** Chunks scoring below `MIN_RELEVANCE_SCORE` (default
+   `0.65`) are dropped. If none remain, the API returns "I could not find this in
+   the uploaded documents." without calling the model. Measured on the current
+   collection, on-topic questions score about 0.75+ and off-topic ones at most 0.55.
+3. **Numbered sources, temperature 0.** The model sees `[1]`, `[2]`, ... with
+   titles and URLs and must cite one after every statement. `OLLAMA_THINK`
+   (default `false`) turns qwen3's reasoning on.
+4. **Verification** (`VERIFY_ANSWERS`, default `true`, Ollama only). A second call
+   checks each sentence of the draft and must quote the supporting passage; a
+   sentence is kept only if the checker marks it supported and the quote is
+   (mostly verbatim) in the sources. The checker returns sentence numbers, so it
+   cannot add text. An answer citing no supplied source is replaced by the
+   refusal.
+
+The checker is the same model judging its own draft, so a claim that a real
+passage only implies can still pass.
+
+After changing how text is embedded (the model, lowercasing, prefixes), re-embed
+the stored chunks once:
+
+```bash
+kubectl -n rag exec deploy/rag-api -- python -m src.reembed
+```
+
 Host `176` has an NVIDIA RTX 3070 Laptop GPU with 8 GiB VRAM. Ollama detects it
 through CUDA, so small models are a reasonable fit. Larger 7B-class models may
 fit only with heavy quantization and will be tight because system RAM is already
