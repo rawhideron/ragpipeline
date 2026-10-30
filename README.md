@@ -39,6 +39,7 @@ Phase 1 RAG stack for the homelab.
 | Vector database | Qdrant `v1.20.0` |
 | API | Python 3.12, FastAPI, Uvicorn, Pydantic |
 | Document handling | pypdf, python-multipart, httpx |
+| Chunking | LangChain `RecursiveCharacterTextSplitter` (1,400 characters, 200 overlap) |
 | Frontend | Static HTML and JavaScript on nginx (`nginx-unprivileged:1.30-alpine`) |
 | Containers | Docker, GitHub Container Registry |
 | Orchestration | Kubernetes, with Kind on host `176` |
