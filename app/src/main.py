@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid5
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -158,16 +159,17 @@ def extract_text(filename: str, payload: bytes) -> str:
 
 
 def chunk_text(text: str, max_chars: int = 1400, overlap: int = 200) -> list[str]:
-    clean = re.sub(r"\s+", " ", text).strip()
-    chunks: list[str] = []
-    start = 0
-    while start < len(clean):
-        end = min(start + max_chars, len(clean))
-        chunks.append(clean[start:end])
-        if end == len(clean):
-            break
-        start = max(0, end - overlap)
-    return [chunk for chunk in chunks if chunk.strip()]
+    # Sentence ends rank above single newlines: PDF lines and inline HTML tags
+    # put newlines in the middle of sentences.
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max_chars,
+        chunk_overlap=overlap,
+        separators=["\n\n", ". ", "! ", "? ", "\n", " ", ""],
+        keep_separator="end",
+    )
+    # Whitespace is collapsed after splitting, which needs the original newlines.
+    chunks = [re.sub(r"\s+", " ", chunk).strip() for chunk in splitter.split_text(text)]
+    return [chunk for chunk in chunks if chunk]
 
 
 def embed_with_openai(texts: list[str]) -> list[list[float]]:
