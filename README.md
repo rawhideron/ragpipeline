@@ -1,5 +1,20 @@
 # ragpipeline
 
+![Ollama](https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white)
+![Qdrant](https://img.shields.io/badge/Qdrant-DC244C?style=for-the-badge&logo=qdrant&logoColor=white)
+![Keycloak](https://img.shields.io/badge/Keycloak-4D4D4D?style=for-the-badge&logo=keycloak&logoColor=white)
+![Envoy Gateway](https://img.shields.io/badge/Envoy_Gateway-AC6199?style=for-the-badge&logo=envoyproxy&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![nginx](https://img.shields.io/badge/nginx-009639?style=for-the-badge&logo=nginx&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![ArgoCD](https://img.shields.io/badge/ArgoCD-EF7B4D?style=for-the-badge&logo=argo&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
+![SonarQube](https://img.shields.io/badge/SonarQube-126ED3?style=for-the-badge&logo=sonarqubeserver&logoColor=white)
+![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white)
+
 Phase 1 RAG stack for the homelab.
 
 ## Target Layout
@@ -27,7 +42,7 @@ Phase 1 RAG stack for the homelab.
 | Frontend | Static HTML and JavaScript on nginx (`nginx-unprivileged:1.30-alpine`) |
 | Containers | Docker, GitHub Container Registry |
 | Orchestration | Kubernetes, with Kind on host `176` |
-| Ingress and auth | nginx Ingress, oauth2-proxy `v7.8.1`, Keycloak (OIDC) |
+| Gateway and auth | Envoy Gateway (Gateway API `HTTPRoute`), oauth2-proxy `v7.15.5`, Keycloak (OIDC) |
 | DNS | DuckDNS |
 | GitOps | ArgoCD |
 | CI/CD | GitHub Actions, Docker Buildx |
@@ -45,7 +60,7 @@ Phase 1 RAG stack for the homelab.
 - static frontend
 - Secrets/ConfigMaps
 - NodePort exposure on host `176`
-- nginx Ingress on host `230`
+- Envoy Gateway `HTTPRoute` on host `230`
 - Keycloak OIDC protection through `oauth2-proxy`
 
 ## Request Flow
@@ -53,8 +68,8 @@ Phase 1 RAG stack for the homelab.
 ```mermaid
 flowchart LR
   user[Browser] --> public[RAG public URL<br/>ragpipeline.duckdns.org]
-  public --> ingress230[Host 230<br/>nginx Ingress<br/>namespace rag]
-  ingress230 --> oauth[oauth2-proxy<br/>OIDC gate]
+  public --> gateway230[Host 230<br/>Envoy Gateway<br/>reunion-gateway]
+  gateway230 --> oauth[oauth2-proxy<br/>OIDC gate]
   oauth --> keycloak[Keycloak<br/>host 230 namespace keycloak<br/>realm ragpipeline]
   oauth --> frontendSvc[ExternalName-like service/endpoints<br/>rag-frontend-176]
   frontendSvc --> proxy176[Host 176 frontend proxy<br/>:18080 to Kind NodePort]

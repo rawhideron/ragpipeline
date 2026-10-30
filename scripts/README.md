@@ -22,7 +22,7 @@ Phase 1 RAG stack for the homelab.
 - static frontend
 - Secrets/ConfigMaps
 - NodePort exposure on host `176`
-- nginx Ingress on host `230`
+- Envoy Gateway `HTTPRoute` on host `230`
 - Keycloak OIDC protection through `oauth2-proxy`
 
 ## OpenAI Billing Reality Check
