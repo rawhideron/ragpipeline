@@ -9,9 +9,31 @@ Phase 1 RAG stack for the homelab.
 - Public URL: `https://ragpipeline.duckdns.org`
 - Keycloak: `https://goodmanreunion.duckdns.org/keycloak/realms/ragpipeline`
 - Vector database: Qdrant
-- Generation provider: Ollama in namespace `rag` on host `176`
+- Generation provider: Ollama `qwen3:8b` in namespace `rag` on host `176`
 - Embeddings provider: Ollama `nomic-embed-text`
 - Ollama: Deployment `rag/ollama` on the RTX 3070 (`k8s/176/05-ollama.yaml`); scaled to 0 by the MLPipeline training DAG while it trains
+
+## Tech Stack
+
+| Layer | Technology |
+| --- | --- |
+| Chat model | `qwen3:8b` |
+| Embedding model | `nomic-embed-text` (768 dimensions) |
+| Model serving | Ollama `0.17.7` on an NVIDIA RTX 3070 Laptop GPU |
+| Optional LLM providers | OpenAI (`gpt-5-mini`, `text-embedding-3-small`), Anthropic (`claude-3-5-haiku-latest`) |
+| Vector database | Qdrant `v1.20.0` |
+| API | Python 3.12, FastAPI, Uvicorn, Pydantic |
+| Document handling | pypdf, python-multipart, httpx |
+| Frontend | Static HTML and JavaScript on nginx (`nginx-unprivileged:1.30-alpine`) |
+| Containers | Docker, GitHub Container Registry |
+| Orchestration | Kubernetes, with Kind on host `176` |
+| Ingress and auth | nginx Ingress, oauth2-proxy `v7.8.1`, Keycloak (OIDC) |
+| DNS | DuckDNS |
+| GitOps | ArgoCD |
+| CI/CD | GitHub Actions, Docker Buildx |
+| Code quality | SonarQube |
+| Testing | pytest, pytest-cov |
+| Observability | OpenTelemetry (OTLP) |
 
 ## What Phase 1 Deploys
 
