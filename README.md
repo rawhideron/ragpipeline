@@ -299,6 +299,38 @@ inside the archive is indexed as a separate document with `source_type` set to
 `python-docs-3`. Re-ingesting the same docs URL with `replace: true` deletes the
 old bundle first, then indexes the current official archive.
 
+## Qdrant Backups
+
+The `qdrant-backup` CronJob (`k8s/176/07-qdrant-backup-cronjob.yaml`) runs at 3 AM
+and 3 PM Eastern, the same schedule as `postgres-backup` in `goodman_reunion`. It
+snapshots the collection, verifies the checksum, uploads the snapshot to the S3
+bucket `ragpipeline-backups`, deletes it from the Qdrant volume, and removes S3
+backups older than 3 days. Pruning runs only after a successful upload.
+
+It needs AWS credentials limited to that bucket. On host `176`:
+
+```bash
+kubectl -n rag create secret generic qdrant-backup-aws-creds \
+  --from-literal=AWS_ACCESS_KEY_ID='...' \
+  --from-literal=AWS_SECRET_ACCESS_KEY='...'
+```
+
+To run a backup now:
+
+```bash
+kubectl -n rag create job --from=cronjob/qdrant-backup qdrant-backup-manual
+```
+
+To restore, copy a snapshot from S3 and upload it to Qdrant. This replaces the
+collection's current data:
+
+```bash
+aws s3 cp s3://ragpipeline-backups/<snapshot> .
+kubectl -n rag port-forward deploy/qdrant 6333:6333 &
+curl -X POST "http://localhost:6333/collections/rag_documents_ollama/snapshots/upload?priority=snapshot" \
+  -F snapshot=@<snapshot>
+```
+
 ## ArgoCD
 
 ArgoCD runs on host `230` and syncs the RAG workloads to host `176`.

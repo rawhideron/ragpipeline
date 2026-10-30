@@ -1,0 +1,99 @@
+# Snapshots the Qdrant collection to S3 on the same schedule as goodman_reunion's
+# postgres-backup. Needs the qdrant-backup-aws-creds Secret (see README).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: qdrant-backup
+  namespace: rag
+spec:
+  schedule: "0 3,15 * * *"
+  timeZone: America/New_York
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: amazon/aws-cli:2.27.50
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+
+                  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                  FILE="${QDRANT_COLLECTION}_${TIMESTAMP}.snapshot"
+                  SNAPSHOTS_URL="${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots"
+
+                  echo "=== Creating snapshot of ${QDRANT_COLLECTION} ==="
+                  RESPONSE=$(curl -fsS -X POST "${SNAPSHOTS_URL}?wait=true")
+                  NAME=$(echo "${RESPONSE}" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+                  CHECKSUM=$(echo "${RESPONSE}" | sed -n 's/.*"checksum":"\([^"]*\)".*/\1/p')
+
+                  # Snapshots stay on the Qdrant volume until deleted.
+                  trap 'curl -fsS -X DELETE "${SNAPSHOTS_URL}/${NAME}?wait=true" > /dev/null' EXIT
+
+                  echo "--- Downloading ${NAME} ---"
+                  curl -fsS -o "/backups/${FILE}" "${SNAPSHOTS_URL}/${NAME}"
+                  echo "${CHECKSUM}  /backups/${FILE}" | sha256sum -c -
+                  echo "snapshot: $(du -sh "/backups/${FILE}" | cut -f1)"
+
+                  echo "--- Uploading to S3 bucket ${S3_BUCKET} ---"
+                  aws s3 cp --no-progress "/backups/${FILE}" "s3://${S3_BUCKET}/${FILE}"
+
+                  # Runs only after a successful upload, so repeated failures
+                  # can't expire the last good backup.
+                  echo "--- Pruning S3 backups (older than 3 days) ---"
+                  CUTOFF="${QDRANT_COLLECTION}_$(date -d '3 days ago' +%Y%m%d_%H%M%S).snapshot"
+                  aws s3 ls "s3://${S3_BUCKET}/" | awk '{print $4}' \
+                    | { grep "^${QDRANT_COLLECTION}_.*\.snapshot$" || true; } \
+                    | while read -r key; do
+                        if [[ "${key}" < "${CUTOFF}" ]]; then
+                          echo "Deleting old S3 backup: ${key}"
+                          aws s3 rm "s3://${S3_BUCKET}/${key}"
+                        fi
+                      done
+
+                  echo "=== Backup complete ==="
+              env:
+                - name: QDRANT_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: rag-config
+                      key: QDRANT_URL
+                - name: QDRANT_COLLECTION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: rag-config
+                      key: QDRANT_COLLECTION
+                - name: S3_BUCKET
+                  value: ragpipeline-backups
+                - name: AWS_DEFAULT_REGION
+                  value: us-east-1
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: qdrant-backup-aws-creds
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: qdrant-backup-aws-creds
+                      key: AWS_SECRET_ACCESS_KEY
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 1Gi
+              volumeMounts:
+                - name: scratch
+                  mountPath: /backups
+          volumes:
+            - name: scratch
+              emptyDir: {}
