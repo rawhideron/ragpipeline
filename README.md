@@ -2,6 +2,7 @@
 
 ![Ollama](https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white)
 ![Qdrant](https://img.shields.io/badge/Qdrant-DC244C?style=for-the-badge&logo=qdrant&logoColor=white)
+![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)
 ![Keycloak](https://img.shields.io/badge/Keycloak-4D4D4D?style=for-the-badge&logo=keycloak&logoColor=white)
 ![Envoy Gateway](https://img.shields.io/badge/Envoy_Gateway-AC6199?style=for-the-badge&logo=envoyproxy&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -299,6 +300,35 @@ inside the archive is indexed as a separate document with `source_type` set to
 `docs_page`, and the whole bundle gets a `collection_id` such as
 `python-docs-3`. Re-ingesting the same docs URL with `replace: true` deletes the
 old bundle first, then indexes the current official archive.
+
+### Chunking
+
+Ingested text is split by `chunk_text` in `app/src/main.py`, using
+`RecursiveCharacterTextSplitter` from `langchain-text-splitters`. This is the only
+part of the pipeline that uses LangChain. Text extraction (`pypdf`), embedding
+(Ollama or OpenAI), storage (Qdrant), retrieval and answer generation are all
+custom Python.
+
+Chunks are at most 1,400 characters with a 200-character overlap. The splitter
+tries these boundaries in order, moving on when a piece is still too long:
+
+1. Blank lines (paragraphs)
+2. Sentence ends (`. `, `! `, `? `)
+3. Single newlines
+4. Spaces
+5. Individual characters, as a last resort
+
+Sentence ends rank above single newlines because PDF lines and inline HTML tags
+put newlines in the middle of sentences. Extracted HTML has no blank lines, so web
+pages and the Python docs split at sentences rather than paragraphs. Whitespace in
+each chunk is collapsed after splitting.
+
+The package also installs `langchain-core` and `langsmith`. LangSmith tracing is
+not configured.
+
+Changing how text is chunked only affects documents ingested afterwards. To
+re-split a stored document, ingest it again. `python -m src.reembed` keeps the
+existing chunks and only recalculates their vectors.
 
 ## Qdrant Backups
 
