@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ghcr.io/rawhideron/ragpipeline-frontend:20b765c4e03ae85b01c63fe1d298b679f133a02c
+          image: ghcr.io/rawhideron/ragpipeline-frontend:b5a5cd9cb109dc5d44779130997bc98c3eed2233
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
