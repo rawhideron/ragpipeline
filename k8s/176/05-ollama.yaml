@@ -75,7 +75,10 @@ spec:
           tolerationSeconds: 30
       containers:
         - name: ollama
-          image: ollama/ollama:0.17.7
+          # Changing the Ollama version can change nomic-embed-text's vectors
+          # (0.17.7 -> 0.40.15 moved it to the llama.cpp runner). After a bump,
+          # re-embed: kubectl -n rag exec deploy/rag-api -- python -m src.reembed
+          image: ollama/ollama:0.40.15
           # Serve, then pull any configured model missing from the volume (a
           # no-op once the PV is seeded). The trap forwards SIGTERM so a
           # scale-down releases the GPU quickly instead of after the grace period.
