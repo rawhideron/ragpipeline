@@ -137,7 +137,6 @@ def test_blocks_shared_address_space(monkeypatch):
     expect_http_error(400, main.validate_http_url, "http://cgnat.example/")
 
 
-@pytest.mark.xfail(strict=True, reason="Known gap: redirects are followed without re-checking the target address")
 def test_fetch_does_not_follow_redirect_to_private_address(monkeypatch):
     def fake_getaddrinfo(host, port):
         ip = PUBLIC_IPV4 if host == "public.example" else "192.168.1.230"
@@ -156,6 +155,94 @@ def test_fetch_does_not_follow_redirect_to_private_address(monkeypatch):
 
     url = main.validate_http_url("http://public.example/page")
     expect_http_error(400, main.fetch_url_text, url)
+
+
+
+def resolve_by_host(monkeypatch, private_hosts=()):
+    def fake_getaddrinfo(host, port):
+        ip = "192.168.1.230" if host in private_hosts else PUBLIC_IPV4
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0))]
+
+    monkeypatch.setattr(main.socket, "getaddrinfo", fake_getaddrinfo)
+
+
+def test_fetch_follows_a_relative_redirect_and_checks_robots_on_the_target(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /private/\n")
+        if request.url.path == "/old":
+            return httpx.Response(301, headers={"location": "/new"})
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text="moved content")
+
+    serve(monkeypatch, handler)
+
+    assert main.fetch_url_text("https://example.com/old") == ("moved content", None)
+    assert seen == [
+        "https://example.com/robots.txt",
+        "https://example.com/old",
+        "https://example.com/robots.txt",
+        "https://example.com/new",
+    ]
+
+
+def test_fetch_refuses_a_redirect_to_a_path_robots_disallows(monkeypatch):
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /private/\n")
+        if request.url.path == "/page":
+            return httpx.Response(302, headers={"location": "/private/page"})
+        raise AssertionError(f"fetched {request.url}")
+
+    serve(monkeypatch, handler)
+
+    expect_http_error(403, main.fetch_url_text, "https://example.com/page")
+
+
+def test_fetch_gives_up_after_too_many_redirects(monkeypatch):
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="")
+        hop = int(request.url.path.strip("/") or 0)
+        return httpx.Response(302, headers={"location": f"/{hop + 1}"})
+
+    serve(monkeypatch, handler)
+
+    detail = expect_http_error(400, main.fetch_url_text, "https://example.com/0")
+
+    assert detail == f"Too many redirects (more than {main.MAX_REDIRECTS})"
+
+
+def test_robots_txt_redirect_to_a_private_address_is_refused(monkeypatch):
+    resolve_by_host(monkeypatch, private_hosts={"internal.example"})
+
+    def handler(request):
+        if request.url.host == "public.example":
+            return httpx.Response(301, headers={"location": "http://internal.example/robots.txt"})
+        raise AssertionError(f"fetched {request.url}")
+
+    serve(monkeypatch, handler)
+
+    detail = expect_http_error(400, main.assert_robots_allowed, "http://public.example/page")
+
+    assert detail == "Private URL ingestion is disabled"
+
+
+def test_docs_archive_redirect_to_a_private_address_is_refused(monkeypatch):
+    resolve_by_host(monkeypatch, private_hosts={"internal.example"})
+
+    def handler(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="")
+        if request.url.host == "public.example":
+            return httpx.Response(302, headers={"location": "http://internal.example/archive.zip"})
+        raise AssertionError(f"fetched {request.url}")
+
+    serve(monkeypatch, handler)
+
+    expect_http_error(400, main.fetch_binary, "http://public.example/archive.zip", 1024)
 
 
 # assert_robots_allowed
