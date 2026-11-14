@@ -36,10 +36,17 @@
       .document-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border: 1px solid #dce2e8; border-radius: 6px; padding: 10px; background: #fbfcfd; }
       .document-title { font-weight: 700; overflow-wrap: anywhere; }
       .document-meta { color: #566579; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+      .document-actions { display: flex; gap: 8px; }
+      .document-edit { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; border-top: 1px solid #dce2e8; padding-top: 4px; }
+      .document-edit[hidden] { display: none; }
+      .document-edit label { font-size: 13px; margin: 10px 0 5px; }
+      .document-edit input { width: 100%; border: 1px solid #c8d0db; border-radius: 6px; padding: 8px; background: white; font: inherit; }
+      .document-edit .document-actions { grid-column: 1 / -1; }
       @media (max-width: 820px) {
         header { align-items: flex-start; flex-direction: column; }
         .grid { grid-template-columns: 1fr; }
         .document-row { grid-template-columns: 1fr; }
+        .document-edit { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -129,6 +136,14 @@
           .replaceAll("'", "&#039;");
       }
 
+      const metadataFields = [
+        ["title", "Title"],
+        ["collection_id", "Collection"],
+        ["source", "Source"],
+        ["license", "License"],
+        ["attribution", "Attribution"],
+      ];
+
       async function loadDocuments() {
         documentsEl.textContent = "Loading documents...";
         try {
@@ -147,11 +162,64 @@
               <div>
                 <div class="document-title">${escapeHtml(doc.title || doc.document_id)}</div>
                 <div class="document-meta">${escapeHtml(doc.source_uri || doc.filename || "")}</div>
-                <div class="document-meta">${doc.chunks} chunks - ${escapeHtml(doc.document_id)}</div>
+                <div class="document-meta">${doc.chunks} chunks - ${escapeHtml(doc.document_id)}${doc.collection_id ? ` - collection ${escapeHtml(doc.collection_id)}` : ""}</div>
               </div>
-              <button class="danger" type="button">Delete</button>
+              <div class="document-actions">
+                <button class="secondary" type="button" data-action="edit">Edit</button>
+                <button class="danger" type="button" data-action="delete">Delete</button>
+              </div>
+              <form class="document-edit" hidden></form>
             `;
-            row.querySelector("button").addEventListener("click", async () => {
+            const editForm = row.querySelector(".document-edit");
+            const fieldId = (name) => `meta-${name}-${doc.document_id}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+            editForm.innerHTML = metadataFields.map(([name, label]) => `
+              <div>
+                <label for="${fieldId(name)}">${label}</label>
+                <input id="${fieldId(name)}" name="${name}" type="text" value="${escapeHtml(doc[name] ?? "")}" />
+              </div>
+            `).join("") + `
+              <div class="document-actions">
+                <button type="submit">Save</button>
+                <button class="secondary" type="button" data-action="cancel">Cancel</button>
+              </div>
+            `;
+            row.querySelector('[data-action="edit"]').addEventListener("click", () => {
+              editForm.hidden = !editForm.hidden;
+            });
+            editForm.querySelector('[data-action="cancel"]').addEventListener("click", () => {
+              editForm.reset();
+              editForm.hidden = true;
+            });
+            editForm.addEventListener("submit", async (event) => {
+              event.preventDefault();
+              const changes = {};
+              for (const [name] of metadataFields) {
+                const value = editForm.elements[name].value.trim() || null;
+                if (value !== (doc[name] ?? null)) changes[name] = value;
+              }
+              if (!Object.keys(changes).length) {
+                editForm.hidden = true;
+                return;
+              }
+              const saveButton = editForm.querySelector('button[type="submit"]');
+              setBusy(saveButton, true, "Saving");
+              try {
+                const response = await fetch(`/api/documents/${encodeURIComponent(doc.document_id)}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(changes),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Save failed");
+                await loadDocuments();
+              } catch (error) {
+                saveButton.disabled = false;
+                setStatus(error.message);
+              } finally {
+                setTimeout(() => setStatus(), 1400);
+              }
+            });
+            row.querySelector('[data-action="delete"]').addEventListener("click", async () => {
               setStatus("Deleting");
               try {
                 const response = await fetch(`/api/documents/${encodeURIComponent(doc.document_id)}`, { method: "DELETE" });

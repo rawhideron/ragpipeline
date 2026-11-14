@@ -88,6 +88,7 @@ def test_get_ingest_job_returns_404_for_unknown_job(client):
         ("post", "/ingest/url", {"400", "403", "413"}),
         ("get", "/ingest/jobs/{job_id}", {"404"}),
         ("post", "/query", {"500"}),
+        ("patch", "/documents/{doc_id}", {"400", "404"}),
     ],
 )
 def test_openapi_documents_error_responses(method, path, codes):
@@ -224,3 +225,59 @@ def test_quote_in_sources(quote, expected):
 )
 def test_split_sentences(text, expected):
     assert main.split_sentences(text) == expected
+
+
+@pytest.fixture
+def local_qdrant(monkeypatch):
+    from qdrant_client import QdrantClient
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    store = QdrantClient(":memory:")
+    store.create_collection(main.COLLECTION, vectors_config=VectorParams(size=2, distance=Distance.COSINE))
+    base = {"title": "Old", "collection_id": None, "updated_at": "2026-01-01", "text": "chunk"}
+    store.upsert(
+        main.COLLECTION,
+        points=[
+            PointStruct(id=1, vector=[1.0, 0.0], payload={**base, "document_id": "doc-a", "chunk_index": 0}),
+            PointStruct(id=2, vector=[0.0, 1.0], payload={**base, "document_id": "doc-a", "chunk_index": 1}),
+            PointStruct(id=3, vector=[1.0, 1.0], payload={**base, "document_id": "doc-b", "chunk_index": 0}),
+        ],
+    )
+    monkeypatch.setattr(main, "qdrant", store)
+    return store
+
+
+def test_patch_document_updates_payload_on_every_chunk_without_touching_vectors(local_qdrant, client):
+    response = client.patch("/documents/doc-a", json={"title": "New title", "collection_id": "k8s", "license": None})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chunks"] == 2
+    assert body["updated"]["title"] == "New title"
+    assert body["updated"]["updated_at"] != "2026-01-01"
+    points = {p.id: p for p in local_qdrant.retrieve(main.COLLECTION, ids=[1, 2, 3], with_vectors=True)}
+    for point_id in (1, 2):
+        payload = points[point_id].payload
+        assert payload["title"] == "New title"
+        assert payload["collection_id"] == "k8s"
+        assert payload.get("license") is None
+        assert payload["text"] == "chunk"
+        assert payload["chunk_index"] == point_id - 1
+    assert points[1].vector == pytest.approx([1.0, 0.0])
+    assert points[3].payload["title"] == "Old"
+    assert points[3].payload["updated_at"] == "2026-01-01"
+
+
+def test_patch_document_returns_404_for_unknown_document(local_qdrant, client):
+    response = client.patch("/documents/missing", json={"title": "x"})
+
+    assert response.status_code == 404
+
+
+def test_patch_document_rejects_an_empty_update(local_qdrant, client):
+    assert client.patch("/documents/doc-a", json={}).status_code == 400
+
+
+@pytest.mark.parametrize("field", ["text", "document_id", "content_hash", "updated_at"])
+def test_patch_document_rejects_fields_that_are_not_editable(local_qdrant, client, field):
+    assert client.patch("/documents/doc-a", json={field: "x"}).status_code == 422
