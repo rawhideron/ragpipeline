@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/rawhideron/ragpipeline-api:b5a5cd9cb109dc5d44779130997bc98c3eed2233
+          image: ghcr.io/rawhideron/ragpipeline-api:6a665049ab1f7962eafd1f1bee9f9b337c803a0d
           imagePullPolicy: IfNotPresent
           env:
             # Traces go to the OTel agent on this node, which forwards to Tempo
@@ -79,7 +79,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/rawhideron/ragpipeline-api:b5a5cd9cb109dc5d44779130997bc98c3eed2233
+          image: ghcr.io/rawhideron/ragpipeline-api:6a665049ab1f7962eafd1f1bee9f9b337c803a0d
           imagePullPolicy: IfNotPresent
           env:
             # Traces go to the OTel agent on this node, which forwards to Tempo
