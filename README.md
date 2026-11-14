@@ -283,6 +283,9 @@ The API exposes:
   docs archive as a background job.
 - `GET /api/ingest/jobs/{job_id}` to check docs archive ingestion progress.
 - `GET /api/documents` to list indexed documents.
+- `PATCH /api/documents/{document_id}` with any of `title`, `collection_id`,
+  `source`, `license`, `attribution` to change a document's metadata on every
+  chunk without re-extracting or re-embedding it (send `null` to clear a field).
 - `DELETE /api/documents/{document_id}` to delete all chunks for one document.
 - `DELETE /api/collections/{collection_id}` to delete a bundled docs ingest.
 - `POST /api/query` to query the indexed chunks.

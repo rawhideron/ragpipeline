@@ -19,7 +19,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pypdf import PdfReader
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import (
@@ -92,6 +92,18 @@ class QueryRequest(BaseModel):
 class UrlIngestRequest(BaseModel):
     url: str
     replace: bool = True
+
+
+class DocumentMetadataUpdate(BaseModel):
+    """Payload fields that can be changed without re-embedding a document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    collection_id: str | None = None
+    source: str | None = None
+    license: str | None = None
+    attribution: str | None = None
 
 
 class PythonDocsIngestRequest(BaseModel):
@@ -763,6 +775,28 @@ def list_documents() -> dict[str, Any]:
 def delete_document(doc_id: str) -> dict[str, Any]:
     delete_document_points(doc_id)
     return {"document_id": doc_id, "deleted": True}
+
+
+@app.patch(
+    "/documents/{doc_id}",
+    responses={
+        400: {"description": "No metadata fields were supplied"},
+        404: {"description": "Document not found"},
+    },
+)
+def update_document_metadata(doc_id: str, update: DocumentMetadataUpdate) -> dict[str, Any]:
+    """Change payload metadata on every chunk of a document, leaving vectors and text alone."""
+    changes = update.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=400, detail="No metadata fields were supplied")
+    ensure_collection()
+    points_filter = document_filter(doc_id)
+    chunks = qdrant.count(collection_name=COLLECTION, count_filter=points_filter, exact=True).count
+    if not chunks:
+        raise HTTPException(status_code=404, detail="Document not found")
+    changes["updated_at"] = utc_now()
+    qdrant.set_payload(collection_name=COLLECTION, payload=changes, points=FilterSelector(filter=points_filter))
+    return {"document_id": doc_id, "chunks": chunks, "updated": changes}
 
 
 @app.delete("/collections/{collection_id}")
