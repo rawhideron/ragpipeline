@@ -6,6 +6,8 @@ import os
 import re
 import socket
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from html.parser import HTMLParser
@@ -68,6 +70,8 @@ MAX_URL_BYTES = int(os.getenv("MAX_URL_BYTES", str(5 * 1024 * 1024)))
 MAX_DOCS_ARCHIVE_BYTES = int(os.getenv("MAX_DOCS_ARCHIVE_BYTES", str(80 * 1024 * 1024)))
 MAX_DOCS_PAGES = int(os.getenv("MAX_DOCS_PAGES", "2000"))
 ALLOW_PRIVATE_URL_INGEST = os.getenv("ALLOW_PRIVATE_URL_INGEST", "false").lower() == "true"
+MAX_REDIRECTS = 5
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 app = FastAPI(title="RAG Pipeline API", version="0.1.0")
 app.add_middleware(
@@ -356,26 +360,49 @@ def validate_http_url(raw_url: str) -> str:
     return raw_url.strip()
 
 
+@contextmanager
+def open_url(url: str, *, check_robots: bool = True) -> Iterator[httpx.Response]:
+    """Stream a GET of url, following redirects one hop at a time.
+
+    httpx's own redirect following would only let us check the first URL, so a
+    public page could redirect to a private address. Here every hop gets the
+    URL safety check and, unless check_robots is False, the robots.txt check.
+    """
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        current = validate_http_url(current)
+        if check_robots:
+            assert_robots_allowed(current)
+        with http_client.stream("GET", current, headers={"User-Agent": INGEST_USER_AGENT}, follow_redirects=False) as response:
+            location = response.headers.get("location")
+            if response.status_code in REDIRECT_STATUSES and location:
+                current = urljoin(str(response.url), location)
+                continue
+            yield response
+            return
+    raise HTTPException(status_code=400, detail=f"Too many redirects (more than {MAX_REDIRECTS})")
+
+
 def assert_robots_allowed(url: str) -> None:
     parsed = urlparse(url)
     robots_url = urljoin(f"{parsed.scheme}://{parsed.netloc}", "/robots.txt")
     try:
-        response = http_client.get(robots_url, headers={"User-Agent": INGEST_USER_AGENT})
-        response.raise_for_status()
+        with open_url(robots_url, check_robots=False) as response:
+            response.raise_for_status()
+            robots_text = response.read().decode(response.encoding or "utf-8", errors="ignore")
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=400, detail=f"Could not verify robots.txt for {parsed.netloc}") from exc
 
     parser = RobotFileParser()
     parser.set_url(robots_url)
-    parser.parse(response.text.splitlines())
+    parser.parse(robots_text.splitlines())
     if not parser.can_fetch(INGEST_USER_AGENT, url):
         raise HTTPException(status_code=403, detail="robots.txt does not allow ingestion of this URL")
 
 
 def fetch_url_text(url: str) -> tuple[str, str | None]:
-    assert_robots_allowed(url)
     try:
-        with http_client.stream("GET", url, headers={"User-Agent": INGEST_USER_AGENT}, follow_redirects=True) as response:
+        with open_url(url) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type and "text/plain" not in content_type:
@@ -425,25 +452,24 @@ def python_docs_collection_id(base_url: str) -> str:
 
 def discover_python_docs_html_zip(base_url: str) -> str:
     download_url = urljoin(base_url, "download.html")
-    assert_robots_allowed(download_url)
     try:
-        response = http_client.get(download_url, headers={"User-Agent": INGEST_USER_AGENT}, follow_redirects=True)
-        response.raise_for_status()
+        with open_url(download_url) as response:
+            response.raise_for_status()
+            html = response.read().decode(response.encoding or "utf-8", errors="ignore")
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=400, detail=f"Python docs download page failed with status {exc.response.status_code}") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=400, detail="Python docs download page fetch failed") from exc
 
-    for href in re.findall(r"href=[\"']([^\"']*)[\"']", response.text):
+    for href in re.findall(r"href=[\"']([^\"']*)[\"']", html):
         if "archives/python-" in href and href.endswith("-docs-html.zip"):
             return urljoin(download_url, href)
     raise HTTPException(status_code=400, detail="Could not find the Python docs HTML zip download link")
 
 
 def fetch_binary(url: str, max_bytes: int) -> bytes:
-    assert_robots_allowed(url)
     try:
-        with http_client.stream("GET", url, headers={"User-Agent": INGEST_USER_AGENT}, follow_redirects=True) as response:
+        with open_url(url) as response:
             response.raise_for_status()
             chunks: list[bytes] = []
             total = 0
