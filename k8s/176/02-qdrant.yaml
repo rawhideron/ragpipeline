@@ -6,6 +6,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: standard
+  # Pinned to the retained volume holding the existing Qdrant data.
+  volumeName: pvc-419beb77-b9d0-4004-bf99-f514693fb1fd-m
   resources:
     requests:
       storage: 10Gi
