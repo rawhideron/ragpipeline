@@ -349,17 +349,37 @@ decrypts it into the Secret `qdrant-backup-aws-creds`, so it survives the `rag`
 namespace being recreated. Only that controller can decrypt it: after rebuilding
 host `176`'s cluster or its sealed-secrets controller, seal it again.
 
-To rotate the key, create a new one and seal it on host `176` without writing
-the plaintext to disk, then commit the file and delete the old key in IAM:
+`ragpipeline-backup` has two access keys, which is IAM's limit. Leave the older
+one, `AKIA3RYC55G2L7WPR4ON`, active: never deactivate or delete it. The other key
+is the one in the SealedSecret, and that's the one to rotate.
 
-```bash
-aws iam create-access-key --user-name ragpipeline-backup --output json \
-  | python3 -c 'import json,sys; k=json.load(sys.stdin)["AccessKey"]; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":"qdrant-backup-aws-creds","namespace":"rag"},"stringData":{"AWS_ACCESS_KEY_ID":k["AccessKeyId"],"AWS_SECRET_ACCESS_KEY":k["SecretAccessKey"]}}))' \
-  | kubeseal --controller-name sealed-secrets --controller-namespace kube-system --format yaml \
-  > /tmp/sealed.yaml
-# Keep the header comment from k8s/176/08-qdrant-backup-aws-creds-sealed.yaml and
-# replace everything below its `---` with /tmp/sealed.yaml.
-```
+To rotate it, run these on host `176` between backups (not near 3 AM or 3 PM
+Eastern). Backups fail from deleting the old key until ArgoCD syncs the new one.
+
+1. Find the key the SealedSecret holds. This prints only the key ID:
+
+   ```bash
+   kubectl -n rag get secret qdrant-backup-aws-creds \
+     -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d; echo
+   ```
+
+2. If it is **not** `AKIA3RYC55G2L7WPR4ON`, delete it to free the slot:
+
+   ```bash
+   aws iam delete-access-key --user-name ragpipeline-backup --access-key-id <key-id-from-step-1>
+   ```
+
+3. Create the new key and seal it without writing the plaintext to disk, then
+   commit the file and merge it so ArgoCD syncs it:
+
+   ```bash
+   aws iam create-access-key --user-name ragpipeline-backup --output json \
+     | python3 -c 'import json,sys; k=json.load(sys.stdin)["AccessKey"]; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":"qdrant-backup-aws-creds","namespace":"rag"},"stringData":{"AWS_ACCESS_KEY_ID":k["AccessKeyId"],"AWS_SECRET_ACCESS_KEY":k["SecretAccessKey"]}}))' \
+     | kubeseal --controller-name sealed-secrets --controller-namespace kube-system --format yaml \
+     > /tmp/sealed.yaml
+   # Keep the header comment from k8s/176/08-qdrant-backup-aws-creds-sealed.yaml and
+   # replace everything below its `---` with /tmp/sealed.yaml.
+   ```
 
 To run a backup now:
 
