@@ -1,0 +1,20 @@
+# AWS credentials for the qdrant-backup CronJob (07-qdrant-backup-cronjob.yaml):
+# a key for the ragpipeline-backup IAM user, which can only list, get, put and
+# delete objects in the ragpipeline-backups bucket. Sealed with host 176's
+# sealed-secrets controller (kube-system/sealed-secrets), so only that cluster
+# can decrypt it. To rotate, see "Qdrant Backups" in the README.
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: qdrant-backup-aws-creds
+  namespace: rag
+spec:
+  encryptedData:
+    AWS_ACCESS_KEY_ID: AgCOrJ7r/amLUlEACY9X/1twIoy0PEezfB76ICkeJAnGhfZNtmfyszppWroeJFh/OyGiXt2/mtO0fvZkmLp/DJb/rKx0eXT5mx+WhxSf1MdlRbHIv5qQ33gS/CgwiZt7CkottGj+lczCz7rFbuDP6RtWvBOOlKJ9oqLwlgX8De3d7152I116m64CqimCeDnsgxpscGx6Aw24gMKpEFGfD8U7m4ovKD1f2Wzj3zgHHVG51uqTcxiCpYE+JDB8rwQnhgCs7GHIO06geMzpA9hWjQEhYZ0r6fQDPaY+Dny5vKlOo13XGxaE5zLwBWlvYy0RHCE1/5V3QJwGT760qaRODekRbRz1pjurzMxIGeq69z0cyThSvhi9KtuyMlRIOMIS8QpsPG4qj5FMUts42DwRMD+bYICEbPKgMrPh6+5nd0rNveiHofPeHmqa/4MLIji+SE9s7jvtQZ6ek5HvBunONJn6xcIDr1b7y46AQjQEjRDpHp3+/wKDAvQUqZSAeziNeyowSfrfhcHX++d9GcCBkqp/MaK8GJ+UumHn4nch78Rc7WrIw4bxzmAtYduPMAqRXPxrqQw8c4ryJxzFerbBD90/l/vD2nRdSSj4TVtFS9mdolvmps2hE9Kk9lVZmHUFwnaeXkMlIu17edxVdGX5KtQoxQ5DNXjOrWk2nXoj7aO5ZJBtxddwVXGAzq0qg8JKxxHJdmQXIkTQPYsXTfrvNi69JS/Eiw==
+    AWS_SECRET_ACCESS_KEY: AgBd74cAO/C4t41mWQp5aCImyLHqMo9qJb4lBoYMULVvzwZ6Ls8MpByBEJ3YVRhwpYru1WzOClERzQ+sK79eCYRoy6xqr/KicoiCXH/ledQMP5Hxyc4ndlXW+n2K4PeSEdBoTuEHVufYrI7wgKdbtq2i+L3uNHIAiPxOelxTM6SS13cB7Rq5bb//SqWBwDLz86QAvizt7N/z7ZamDav3TQYFm0HPneiQmI2hLE1Ndz3jZFrYQCcSmnslBgddXGpxJYSUQRL+NY1uIkjQhrHUiKJFvwPXl8KIutpficZGAGLtvxtolM8hGxhSeBT9BFnNZZncXF/gjlDwX6Fd8uIbyHU/zarZ0mtDNRhEiacJBis4prSDMls3kCEKJM8FbwHpgdKE066OOF8HBxf5PHnwmmQCBZ9Bc7VhEf5pcnGO0E0yxzrk0+cXxOOaliV57uN/zkGBlH7KApMubnI+ivx9DZfdtqh6fhLl2hTDkEGEgnJegBLOrbmQO9IIbH2r0LKNVtjccuTvRaZGUAjzfQzl3CsCz/P2nKN7obUKzWRLsQ9GCOzd2Kccn5qVHoK4ixBFKQH5BY2n9OfkcouxByQkOgnB+sME9jN/YvGx+tK0WhvQ7jqedaAU4BRVtXYPLP8ugtf7rG3OjoRoyWHsHQdXW+jLQM9KPMUVmfQ8nzjMbN3xkECO0v/c7ei6gf6c0mFmAF3DnZFUv60AYMxjaJszYdPTW0l7TOnte68VR68FELBcZN9ZfTGAX8Yi
+  template:
+    metadata:
+      name: qdrant-backup-aws-creds
+      namespace: rag
+    type: Opaque

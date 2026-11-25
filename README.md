@@ -341,12 +341,24 @@ snapshots the collection, verifies the checksum, uploads the snapshot to the S3
 bucket `ragpipeline-backups`, deletes it from the Qdrant volume, and removes S3
 backups older than 3 days. Pruning runs only after a successful upload.
 
-It needs AWS credentials limited to that bucket. On host `176`:
+It authenticates as the IAM user `ragpipeline-backup`, which can only list,
+get, put and delete objects in that bucket. Its key is in the SealedSecret
+`k8s/176/08-qdrant-backup-aws-creds-sealed.yaml`. ArgoCD syncs it with the rest
+of `k8s/176`, and host `176`'s sealed-secrets controller (`kube-system/sealed-secrets`)
+decrypts it into the Secret `qdrant-backup-aws-creds`, so it survives the `rag`
+namespace being recreated. Only that controller can decrypt it: after rebuilding
+host `176`'s cluster or its sealed-secrets controller, seal it again.
+
+To rotate the key, create a new one and seal it on host `176` without writing
+the plaintext to disk, then commit the file and delete the old key in IAM:
 
 ```bash
-kubectl -n rag create secret generic qdrant-backup-aws-creds \
-  --from-literal=AWS_ACCESS_KEY_ID='...' \
-  --from-literal=AWS_SECRET_ACCESS_KEY='...'
+aws iam create-access-key --user-name ragpipeline-backup --output json \
+  | python3 -c 'import json,sys; k=json.load(sys.stdin)["AccessKey"]; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":"qdrant-backup-aws-creds","namespace":"rag"},"stringData":{"AWS_ACCESS_KEY_ID":k["AccessKeyId"],"AWS_SECRET_ACCESS_KEY":k["SecretAccessKey"]}}))' \
+  | kubeseal --controller-name sealed-secrets --controller-namespace kube-system --format yaml \
+  > /tmp/sealed.yaml
+# Keep the header comment from k8s/176/08-qdrant-backup-aws-creds-sealed.yaml and
+# replace everything below its `---` with /tmp/sealed.yaml.
 ```
 
 To run a backup now:
